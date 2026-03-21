@@ -9,11 +9,14 @@ const { fileURLToPath, URL } = require('node:url')
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL)
 const downloadTasks = new Map()
+const downloadLogs = []
 const activeDownloads = new Map()
 let schedulerActive = false
 let scheduleAgain = false
 let lastRecoverySummary = null
 let persistTasksTimer = null
+let persistLogsTimer = null
+const maxDownloadLogs = 2000
 
 const defaultSettings = () => ({
   downloadDirectory: app.getPath('downloads'),
@@ -24,6 +27,7 @@ const defaultSettings = () => ({
 
 const getSettingsPath = () => path.join(app.getPath('userData'), 'settings.json')
 const getTasksPath = () => path.join(app.getPath('userData'), 'download-tasks.json')
+const getLogsPath = () => path.join(app.getPath('userData'), 'download-logs.json')
 
 const ensureSettings = async () => {
   const filePath = getSettingsPath()
@@ -76,6 +80,11 @@ const persistDownloadTasks = async () => {
   await fsp.writeFile(getTasksPath(), JSON.stringify(payload, null, 2), 'utf8')
 }
 
+const persistDownloadLogs = async () => {
+  await fsp.mkdir(path.dirname(getLogsPath()), { recursive: true })
+  await fsp.writeFile(getLogsPath(), JSON.stringify(downloadLogs, null, 2), 'utf8')
+}
+
 const schedulePersistDownloadTasks = () => {
   if (persistTasksTimer) {
     clearTimeout(persistTasksTimer)
@@ -84,6 +93,17 @@ const schedulePersistDownloadTasks = () => {
   persistTasksTimer = setTimeout(() => {
     persistTasksTimer = null
     void persistDownloadTasks()
+  }, 180)
+}
+
+const schedulePersistDownloadLogs = () => {
+  if (persistLogsTimer) {
+    clearTimeout(persistLogsTimer)
+  }
+
+  persistLogsTimer = setTimeout(() => {
+    persistLogsTimer = null
+    void persistDownloadLogs()
   }, 180)
 }
 
@@ -112,6 +132,85 @@ const removeTaskArtifacts = async (task, options = {}) => {
   if (includeOutput && task.outputPath) {
     await fsp.rm(task.outputPath, { force: true }).catch(() => {})
   }
+}
+
+const listDownloadLogSnapshots = () =>
+  [...downloadLogs].sort(
+    (left, right) =>
+      new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime(),
+  )
+
+const broadcastDownloadLogs = () => {
+  const payload = listDownloadLogSnapshots()
+  schedulePersistDownloadLogs()
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send('download-logs:changed', payload)
+  }
+}
+
+const appendDownloadLog = ({
+  task,
+  level = '信息',
+  message,
+  status,
+  outputPath,
+}) => {
+  if (!task || !message) {
+    return
+  }
+
+  downloadLogs.push({
+    id: `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+    taskId: task.id,
+    adapterId: task.adapterId,
+    seriesTitle: task.seriesTitle,
+    episodeTitle: task.episodeTitle,
+    fileName: task.fileName,
+    outputPath: outputPath ?? task.outputPath ?? '',
+    status: status ?? task.status,
+    level,
+    message,
+    timestamp: new Date().toISOString(),
+  })
+
+  if (downloadLogs.length > maxDownloadLogs) {
+    downloadLogs.splice(0, downloadLogs.length - maxDownloadLogs)
+  }
+
+  broadcastDownloadLogs()
+}
+
+const restoreDownloadLogs = async () => {
+  try {
+    const raw = await fsp.readFile(getLogsPath(), 'utf8')
+    const parsed = JSON.parse(raw)
+
+    if (!Array.isArray(parsed)) {
+      return
+    }
+
+    downloadLogs.length = 0
+
+    for (const item of parsed.slice(-maxDownloadLogs)) {
+      if (!item || typeof item !== 'object') {
+        continue
+      }
+
+      downloadLogs.push({
+        id: item.id || `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+        taskId: item.taskId || '',
+        adapterId: item.adapterId || '',
+        seriesTitle: item.seriesTitle || '',
+        episodeTitle: item.episodeTitle || '',
+        fileName: item.fileName || '',
+        outputPath: item.outputPath || '',
+        status: item.status || '等待中',
+        level: item.level || '信息',
+        message: item.message || '',
+        timestamp: item.timestamp || new Date().toISOString(),
+      })
+    }
+  } catch {}
 }
 
 const restoreDownloadTasks = async () => {
@@ -162,12 +261,21 @@ const restoreDownloadTasks = async () => {
           task.transferredBytes = 0
           task.totalBytes = 0
           summary.missingCompletedFiles += 1
+          appendDownloadLog({
+            task,
+            level: '警告',
+            message: '历史已完成文件缺失，任务已自动改为失败状态。',
+          })
         }
       } else {
         if (task.status === '下载中' || task.status === '等待中') {
           task.status = '等待中'
           task.errorMessage = '应用重启后已恢复为等待中。'
           summary.resumedAsWaiting += 1
+          appendDownloadLog({
+            task,
+            message: '应用重启后恢复任务状态，已重新排入等待队列。',
+          })
         }
 
         const tempExists = await fileExists(task.tempPath)
@@ -176,6 +284,11 @@ const restoreDownloadTasks = async () => {
           task.transferredBytes = 0
           task.totalBytes = 0
           task.tempPath = task.outputPath ? getTaskTempPath(task.outputPath) : ''
+          appendDownloadLog({
+            task,
+            level: '警告',
+            message: '未找到断点临时文件，后续恢复下载时将从头开始。',
+          })
         }
       }
 
@@ -376,6 +489,12 @@ const downloadHttpFile = (
         task.progress = 0
         task.transferredBytes = 0
         transferred = 0
+        appendDownloadLog({
+          task,
+          level: '警告',
+          message: '远程源未返回分段响应，已自动回退为从头下载。',
+          outputPath,
+        })
       }
 
       const writeStream = fs.createWriteStream(outputPath, {
@@ -447,6 +566,15 @@ const startTask = async (task) => {
     task.transferredBytes = 0
   }
 
+  appendDownloadLog({
+    task,
+    message:
+      task.transferredBytes > 0
+        ? `继续下载，已从 ${task.transferredBytes} 字节断点恢复。`
+        : '开始下载任务。',
+    outputPath: task.outputPath,
+  })
+
   task.status = '下载中'
   task.progress = Math.max(task.progress, 1)
   task.errorMessage = task.errorMessage === '应用重启后已恢复为等待中。' ? '' : task.errorMessage
@@ -463,15 +591,31 @@ const startTask = async (task) => {
     task.progress = 100
     task.status = '已完成'
     task.errorMessage = ''
+    appendDownloadLog({
+      task,
+      message: '下载完成，已写入目标目录。',
+      outputPath: task.outputPath,
+    })
   } catch (error) {
     const isPaused =
       controller.signal.aborted && controller.signal.reason === 'paused'
 
     if (isPaused) {
       task.status = '已暂停'
+      appendDownloadLog({
+        task,
+        message: `已暂停下载，当前已保留 ${task.transferredBytes} 字节断点。`,
+        outputPath: task.outputPath,
+      })
     } else {
       task.status = '失败'
       task.errorMessage = error instanceof Error ? error.message : '下载失败'
+      appendDownloadLog({
+        task,
+        level: '错误',
+        message: task.errorMessage,
+        outputPath: task.outputPath,
+      })
     }
   } finally {
     activeDownloads.delete(task.id)
@@ -617,11 +761,12 @@ ipcMain.handle('files:save-text', async (_event, input) => {
 })
 
 ipcMain.handle('downloads:list', async () => listTaskSnapshots())
+ipcMain.handle('download-logs:list', async () => listDownloadLogSnapshots())
 
 ipcMain.handle('downloads:enqueue', async (_event, inputs) => {
   for (const input of inputs) {
     if (!downloadTasks.has(input.taskId)) {
-      downloadTasks.set(input.taskId, {
+      const task = {
         id: input.taskId,
         adapterId: input.adapterId,
         seriesId: input.seriesId,
@@ -639,6 +784,12 @@ ipcMain.handle('downloads:enqueue', async (_event, inputs) => {
         status: '等待中',
         errorMessage: '',
         createdAt: Date.now() + downloadTasks.size,
+      }
+
+      downloadTasks.set(input.taskId, task)
+      appendDownloadLog({
+        task,
+        message: '任务已加入下载队列。',
       })
     }
   }
@@ -656,6 +807,11 @@ ipcMain.handle('downloads:pause', async (_event, taskId) => {
 
   if (task.status === '等待中') {
     task.status = '已暂停'
+    appendDownloadLog({
+      task,
+      message: '任务在开始前被手动暂停。',
+      outputPath: task.outputPath,
+    })
   }
 
   const controller = activeDownloads.get(taskId)
@@ -676,6 +832,11 @@ ipcMain.handle('downloads:resume', async (_event, taskId) => {
   if (task.status === '已暂停' || task.status === '失败') {
     task.status = '等待中'
     task.errorMessage = ''
+    appendDownloadLog({
+      task,
+      message: '任务已恢复到等待队列。',
+      outputPath: task.outputPath,
+    })
   }
 
   broadcastDownloads()
@@ -688,12 +849,23 @@ ipcMain.handle('downloads:retry-failed', async () => {
     if (task.status === '失败') {
       task.status = '等待中'
       task.errorMessage = ''
+      appendDownloadLog({
+        task,
+        message: '失败任务已重新加入等待队列。',
+        outputPath: task.outputPath,
+      })
     }
   }
 
   broadcastDownloads()
   void maybeStartDownloads()
   return listTaskSnapshots()
+})
+
+ipcMain.handle('download-logs:clear', async () => {
+  downloadLogs.length = 0
+  broadcastDownloadLogs()
+  return listDownloadLogSnapshots()
 })
 
 ipcMain.handle('downloads:clear-completed', async () => {
@@ -749,6 +921,7 @@ ipcMain.handle('downloads:show-in-folder', async (_event, taskId) => {
 
 app.whenReady().then(async () => {
   await ensureSettings()
+  await restoreDownloadLogs()
   await restoreDownloadTasks()
   await createWindow()
   void maybeStartDownloads()
@@ -771,5 +944,10 @@ app.on('before-quit', () => {
     clearTimeout(persistTasksTimer)
     persistTasksTimer = null
   }
+  if (persistLogsTimer) {
+    clearTimeout(persistLogsTimer)
+    persistLogsTimer = null
+  }
   void persistDownloadTasks()
+  void persistDownloadLogs()
 })

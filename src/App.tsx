@@ -18,6 +18,7 @@ import {
 import type { Episode, Resolution, Series } from './catalog'
 import type {
   DesktopContext,
+  DesktopDownloadLogEntry,
   DesktopDownloadTask,
   DesktopDownloadRecoverySummary,
   DesktopSettings,
@@ -47,10 +48,16 @@ const defaultManualForm: ManualSourceForm = {
 }
 
 const queueStatusOptions = ['全部', '等待中', '下载中', '已完成', '已暂停', '失败'] as const
+const logLevelOptions = ['全部', '信息', '警告', '错误'] as const
 
 const buildManifestFileName = () => {
   const stamp = new Date().toISOString().replaceAll(':', '-').replace(/\.\d+Z$/, 'Z')
   return `manual-sources-${stamp}.json`
+}
+
+const buildLogExportFileName = () => {
+  const stamp = new Date().toISOString().replaceAll(':', '-').replace(/\.\d+Z$/, 'Z')
+  return `download-logs-${stamp}.json`
 }
 
 const downloadTextFileInBrowser = (fileName: string, content: string) => {
@@ -95,6 +102,9 @@ const readStorage = <T,>(key: string, fallback: T): T => {
 
 const formatUpdatedAt = (value: string) =>
   value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '尚未同步'
+
+const formatLogTime = (value: string) =>
+  new Date(value).toLocaleString('zh-CN', { hour12: false })
 
 const formatBytes = (bytes: number) => {
   if (!bytes) {
@@ -166,6 +176,7 @@ function App() {
     readStorage(queueStorageKey, []),
   )
   const [desktopDownloads, setDesktopDownloads] = useState<DesktopDownloadTask[]>([])
+  const [desktopLogs, setDesktopLogs] = useState<DesktopDownloadLogEntry[]>([])
   const [activeCategory, setActiveCategory] = useState('全部')
   const [searchTerm, setSearchTerm] = useState('')
   const deferredSearch = useDeferredValue(searchTerm.trim().toLowerCase())
@@ -173,6 +184,10 @@ function App() {
   const deferredQueueSearch = useDeferredValue(queueSearchTerm.trim().toLowerCase())
   const [queueStatusFilter, setQueueStatusFilter] =
     useState<(typeof queueStatusOptions)[number]>('全部')
+  const [logSearchTerm, setLogSearchTerm] = useState('')
+  const deferredLogSearch = useDeferredValue(logSearchTerm.trim().toLowerCase())
+  const [logLevelFilter, setLogLevelFilter] =
+    useState<(typeof logLevelOptions)[number]>('全部')
   const [selectedResolution, setSelectedResolution] =
     useState<Resolution>(fallbackDesktopSettings.preferredResolution)
   const [selectedSeriesId, setSelectedSeriesId] = useState<string>(
@@ -237,9 +252,32 @@ function App() {
     })
   }, [deferredQueueSearch, queueStatusFilter, visibleQueue])
 
+  const filteredLogs = useMemo(() => {
+    return desktopLogs.filter((item) => {
+      const matchesLevel =
+        logLevelFilter === '全部' || item.level === logLevelFilter
+      const searchBucket = [
+        item.seriesTitle,
+        item.episodeTitle,
+        item.fileName,
+        item.adapterId,
+        item.message,
+        item.outputPath,
+      ]
+        .join(' ')
+        .toLowerCase()
+
+      const matchesSearch =
+        deferredLogSearch.length === 0 || searchBucket.includes(deferredLogSearch)
+
+      return matchesLevel && matchesSearch
+    })
+  }, [deferredLogSearch, desktopLogs, logLevelFilter])
+
   useEffect(() => {
     let disposed = false
-    let unsubscribe = () => {}
+    let unsubscribeDownloads = () => {}
+    let unsubscribeLogs = () => {}
 
     const bootstrapDesktop = async () => {
       if (!isDesktopShellAvailable() || !window.desktopApi) {
@@ -249,10 +287,11 @@ function App() {
         return
       }
 
-      const [context, settings, downloads, recovery] = await Promise.all([
+      const [context, settings, downloads, logs, recovery] = await Promise.all([
         window.desktopApi.getContext(),
         window.desktopApi.getSettings(),
         window.desktopApi.getDownloads(),
+        window.desktopApi.getDownloadLogs(),
         window.desktopApi.getDownloadRecoverySummary(),
       ])
 
@@ -260,9 +299,14 @@ function App() {
         return
       }
 
-      unsubscribe = window.desktopApi.onDownloadsChanged((tasks) => {
+      unsubscribeDownloads = window.desktopApi.onDownloadsChanged((tasks) => {
         startTransition(() => {
           setDesktopDownloads(tasks)
+        })
+      })
+      unsubscribeLogs = window.desktopApi.onDownloadLogsChanged((logsPayload) => {
+        startTransition(() => {
+          setDesktopLogs(logsPayload)
         })
       })
 
@@ -271,6 +315,7 @@ function App() {
         setDesktopSettings(settings)
         setSelectedResolution(settings.preferredResolution)
         setDesktopDownloads(downloads)
+        setDesktopLogs(logs)
         setActionMessage(buildRecoveryMessage(recovery))
         setDesktopReady(true)
       })
@@ -280,7 +325,8 @@ function App() {
 
     return () => {
       disposed = true
-      unsubscribe()
+      unsubscribeDownloads()
+      unsubscribeLogs()
     }
   }, [])
 
@@ -355,6 +401,18 @@ function App() {
       total: visibleQueue.length,
     }
   }, [visibleQueue])
+
+  const logStats = useMemo(() => {
+    const info = desktopLogs.filter((item) => item.level === '信息').length
+    const warning = desktopLogs.filter((item) => item.level === '警告').length
+    const error = desktopLogs.filter((item) => item.level === '错误').length
+    return {
+      info,
+      warning,
+      error,
+      total: desktopLogs.length,
+    }
+  }, [desktopLogs])
 
   const persistDesktopSettings = async (patch: Partial<DesktopSettings>) => {
     if (!window.desktopApi) {
@@ -594,6 +652,52 @@ function App() {
     }
 
     setBrowserQueue((current) => current.filter((item) => item.status !== '失败'))
+  }
+
+  const exportDownloadLogs = async () => {
+    try {
+      const content = JSON.stringify(
+        {
+          version: 1,
+          exportedAt: new Date().toISOString(),
+          total: desktopLogs.length,
+          logs: desktopLogs,
+        },
+        null,
+        2,
+      )
+      const fileName = buildLogExportFileName()
+
+      if (desktopContext.isElectron && window.desktopApi) {
+        const filePath = await window.desktopApi.saveTextFile({
+          defaultFileName: fileName,
+          content,
+        })
+
+        if (!filePath) {
+          return
+        }
+
+        setActionMessage(`下载日志已导出到 ${filePath}`)
+        return
+      }
+
+      downloadTextFileInBrowser(fileName, content)
+      setActionMessage('下载日志已在浏览器中导出。')
+    } catch (error) {
+      setActionMessage(error instanceof Error ? error.message : '导出下载日志失败。')
+    }
+  }
+
+  const clearDownloadLogs = async () => {
+    if (!window.desktopApi || !desktopContext.isElectron) {
+      setDesktopLogs([])
+      setActionMessage('浏览器预览模式下已清空日志。')
+      return
+    }
+
+    await window.desktopApi.clearDownloadLogs()
+    setActionMessage('下载日志已清空。')
   }
 
   const openDownloadFile = async (taskId: string) => {
@@ -1119,6 +1223,102 @@ function App() {
                     保存到资源库
                   </button>
                 </form>
+              </section>
+
+              <section>
+                <div className="section-header">
+                  <div>
+                    <p className="eyebrow">日志中心</p>
+                    <h3>下载日志</h3>
+                  </div>
+                  <div className="queue-stats">
+                    <span>信息 {logStats.info}</span>
+                    <span>警告 {logStats.warning}</span>
+                    <span>错误 {logStats.error}</span>
+                  </div>
+                </div>
+
+                <div className="button-row">
+                  <button
+                    className="small"
+                    onClick={() => void exportDownloadLogs()}
+                    disabled={desktopLogs.length === 0}
+                  >
+                    导出日志
+                  </button>
+                  <button
+                    className="small ghost"
+                    onClick={() => void clearDownloadLogs()}
+                    disabled={desktopLogs.length === 0}
+                  >
+                    清空日志
+                  </button>
+                  <span className="pill">当前 {filteredLogs.length} / {logStats.total} 条</span>
+                </div>
+
+                <div className="queue-tools">
+                  <input
+                    className="search-input queue-search"
+                    value={logSearchTerm}
+                    onChange={(event) => setLogSearchTerm(event.target.value)}
+                    placeholder="搜索标题、文件名、适配器、输出路径或日志内容"
+                  />
+                  <div className="filter-row">
+                    {logLevelOptions.map((level) => (
+                      <button
+                        key={level}
+                        className={
+                          level === logLevelFilter ? 'filter-chip active' : 'filter-chip'
+                        }
+                        onClick={() => setLogLevelFilter(level)}
+                      >
+                        {level}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="log-list">
+                  {!desktopContext.isElectron ? (
+                    <div className="empty-state">
+                      浏览器预览模式下不写入持久化下载日志，请在 Electron 桌面环境查看。
+                    </div>
+                  ) : desktopLogs.length === 0 ? (
+                    <div className="empty-state">
+                      还没有日志。加入下载任务、暂停恢复或失败重试后，这里会记录关键事件。
+                    </div>
+                  ) : filteredLogs.length === 0 ? (
+                    <div className="empty-state">
+                      没有匹配的日志，试试清空搜索词或切换日志级别筛选。
+                    </div>
+                  ) : (
+                    filteredLogs.map((item) => (
+                      <article key={item.id} className="log-row">
+                        <div className="log-head">
+                          <div>
+                            <strong>
+                              {item.seriesTitle} · {item.episodeTitle}
+                            </strong>
+                            <p>
+                              {item.adapterId} · {item.fileName}
+                            </p>
+                          </div>
+                          <span className="pill log-pill" data-level={item.level}>
+                            {item.level}
+                          </span>
+                        </div>
+                        <div className="log-message">{item.message}</div>
+                        <div className="queue-foot">
+                          <span>
+                            {item.status} · {formatLogTime(item.timestamp)}
+                          </span>
+                          <span>{item.taskId}</span>
+                        </div>
+                        {item.outputPath ? <div className="queue-path">{item.outputPath}</div> : null}
+                      </article>
+                    ))
+                  )}
+                </div>
               </section>
             </div>
           </div>

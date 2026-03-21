@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld('desktopApi', {
   retryFailedDownloads: () => ipcRenderer.invoke('downloads:retry-failed'),
   clearCompletedDownloads: () => ipcRenderer.invoke('downloads:clear-completed'),
   clearFailedDownloads: () => ipcRenderer.invoke('downloads:clear-failed'),
+  getDownloadLogs: () => ipcRenderer.invoke('download-logs:list'),
+  clearDownloadLogs: () => ipcRenderer.invoke('download-logs:clear'),
   openDownloadFile: (taskId) => ipcRenderer.invoke('downloads:open-file', taskId),
   showDownloadInFolder: (taskId) => ipcRenderer.invoke('downloads:show-in-folder', taskId),
   openTextFile: () => ipcRenderer.invoke('files:open-text'),
@@ -24,6 +26,13 @@ contextBridge.exposeInMainWorld('desktopApi', {
     ipcRenderer.on('downloads:changed', listener)
     return () => {
       ipcRenderer.removeListener('downloads:changed', listener)
+    }
+  },
+  onDownloadLogsChanged: (callback) => {
+    const listener = (_event, logs) => callback(logs)
+    ipcRenderer.on('download-logs:changed', listener)
+    return () => {
+      ipcRenderer.removeListener('download-logs:changed', listener)
     }
   },
 })

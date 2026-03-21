@@ -173,7 +173,8 @@
 .category-list,
 .catalog-list,
 .episode-list,
-.queue-list {
+.queue-list,
+.log-list {
   display: grid;
   gap: 12px;
 }
@@ -333,7 +334,8 @@ button:disabled {
 }
 
 .episode-row,
-.queue-row {
+.queue-row,
+.log-row {
   padding: 14px;
   border-radius: 18px;
   background: rgba(15, 23, 42, 0.56);
@@ -401,6 +403,47 @@ button:disabled {
 
 .queue-actions {
   margin-top: 10px;
+}
+
+.log-list {
+  max-height: 540px;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.log-head {
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+
+.log-head p {
+  margin: 6px 0 0;
+  color: var(--muted);
+}
+
+.log-message {
+  margin-top: 12px;
+  color: var(--text-strong);
+}
+
+.log-pill[data-level='警告'] {
+  color: #fde68a;
+  border-color: rgba(250, 204, 21, 0.25);
+  background: rgba(120, 53, 15, 0.48);
+}
+
+.log-pill[data-level='错误'] {
+  color: #fecaca;
+  border-color: rgba(248, 113, 113, 0.25);
+  background: rgba(127, 29, 29, 0.48);
+}
+
+.log-pill[data-level='信息'] {
+  color: #bfdbfe;
+  border-color: rgba(96, 165, 250, 0.24);
+  background: rgba(30, 64, 175, 0.38);
 }
 
 .queue-search {
@@ -512,7 +555,8 @@ button:disabled {
 
   .episode-row,
   .queue-head,
-  .section-header {
+  .section-header,
+  .log-head {
     display: grid;
   }
 }

@@ -1,5 +1,6 @@
 import type {
   DesktopContext,
+  DesktopDownloadLogEntry,
   DesktopDownloadTask,
   DesktopDownloadRecoverySummary,
   DesktopSettings,
@@ -25,6 +26,8 @@ type DesktopApi = {
   retryFailedDownloads: () => Promise<DesktopDownloadTask[]>
   clearCompletedDownloads: () => Promise<DesktopDownloadTask[]>
   clearFailedDownloads: () => Promise<DesktopDownloadTask[]>
+  getDownloadLogs: () => Promise<DesktopDownloadLogEntry[]>
+  clearDownloadLogs: () => Promise<DesktopDownloadLogEntry[]>
   openDownloadFile: (taskId: string) => Promise<string>
   showDownloadInFolder: (taskId: string) => Promise<boolean>
   openTextFile: () => Promise<OpenTextFileResult | null>
@@ -35,6 +38,9 @@ type DesktopApi = {
   getDownloadRecoverySummary: () => Promise<DesktopDownloadRecoverySummary | null>
   onDownloadsChanged: (
     callback: (tasks: DesktopDownloadTask[]) => void,
+  ) => () => void
+  onDownloadLogsChanged: (
+    callback: (logs: DesktopDownloadLogEntry[]) => void,
   ) => () => void
 }
 

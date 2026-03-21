@@ -21,6 +21,8 @@ export type DesktopDownloadStatus =
   | '已暂停'
   | '失败'
 
+export type DesktopDownloadLogLevel = '信息' | '警告' | '错误'
+
 export type EnqueueDownloadInput = {
   taskId: string
   adapterId: string
@@ -49,6 +51,20 @@ export type DesktopDownloadTask = {
   totalBytes: number
   status: DesktopDownloadStatus
   errorMessage?: string
+}
+
+export type DesktopDownloadLogEntry = {
+  id: string
+  taskId: string
+  adapterId: string
+  seriesTitle: string
+  episodeTitle: string
+  fileName: string
+  outputPath: string
+  status: DesktopDownloadStatus
+  level: DesktopDownloadLogLevel
+  message: string
+  timestamp: string
 }
 
 export type OpenTextFileResult = {
