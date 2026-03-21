@@ -17,7 +17,7 @@ export type Series = {
   sourceId: string
   title: string
   category: string
-  status: '免费样例' | '手动导入'
+  status: '免费样例' | '手动导入' | '资源发现'
   description: string
   tags: string[]
   totalEpisodes: number

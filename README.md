@@ -31,6 +31,7 @@
 - 用户配置写入 Electron `userData` 目录
 - 手动资源模板录入
 - 手动资源清单 JSON 导入 / 导出
+- 本地资源库清单 JSON 导入 / 导出
 - 浏览器模式下的队列模拟预览
 
 ## 合规边界
@@ -138,6 +139,9 @@ flowchart LR
 - [src/manualSources.ts](/D:/HongGuo_AutoTools/src/manualSources.ts)
   手动资源清单的导入、导出、解析、合并。
 
+- [src/discoveredSources.ts](/D:/HongGuo_AutoTools/src/discoveredSources.ts)
+  资源发现层的数据结构、资源库清单解析、系列构建与合并。
+
 - [src/desktop.ts](/D:/HongGuo_AutoTools/src/desktop.ts)
   桌面上下文、任务类型、IPC 类型。
 
@@ -149,6 +153,12 @@ flowchart LR
 
 - [docs/adapter-development.md](/D:/HongGuo_AutoTools/docs/adapter-development.md)
   适配器开发说明。
+
+- [docs/resource-discovery.md](/D:/HongGuo_AutoTools/docs/resource-discovery.md)
+  资源发现层说明。
+
+- [resource-library.template.json](/D:/HongGuo_AutoTools/manifest-templates/resource-library.template.json)
+  本地资源库清单模板。
 
 ## 下载任务执行链路
 
@@ -220,6 +230,28 @@ D:\media\series-{episodeIndex}.mp4
 ```
 
 这些模板最终由 `manual-template` 适配器解析成真实下载地址。
+
+## 资源发现层
+
+资源发现层适合一次导入多部剧的元数据与集列表，不直接生成下载地址。
+它的职责是先把资源目录组织进界面，再交给现有适配器去解析最终的合法下载源。
+
+推荐入口：
+
+- 模板：[resource-library.template.json](/D:/HongGuo_AutoTools/manifest-templates/resource-library.template.json)
+- 说明：[resource-discovery.md](/D:/HongGuo_AutoTools/docs/resource-discovery.md)
+
+资源库清单里的每个条目至少需要：
+
+- `title`
+- `adapterId`
+- `sourceId`
+
+导入规则：
+
+- 按 `id` 合并
+- 缺少 `title`、`adapterId` 或 `sourceId` 的条目会被判定为无效
+- `episodes` 可选，不写全时界面会自动补齐剩余集数
 
 ## 手动资源清单
 

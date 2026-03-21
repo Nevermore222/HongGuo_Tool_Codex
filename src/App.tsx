@@ -11,6 +11,11 @@ import {
   stringifyManualSourceManifest,
 } from './manualSources'
 import {
+  mergeDiscoveredSeries,
+  parseDiscoveredSeriesManifest,
+  stringifyDiscoveredSeriesManifest,
+} from './discoveredSources'
+import {
   getAdapterOptions,
   getCatalogFromAdapters,
   resolveEpisodeDownload,
@@ -23,6 +28,7 @@ import type {
   DesktopDownloadRecoverySummary,
   DesktopSettings,
 } from './desktop'
+import type { DiscoveredSeriesRecord } from './discoveredSources'
 import type { ManualSourceRecord } from './sourceAdapters'
 import type { FormEvent } from 'react'
 
@@ -36,6 +42,7 @@ type ManualSourceForm = {
 
 const queueStorageKey = 'hongguo-tool-framework-queue'
 const manualStorageKey = 'hongguo-tool-framework-manual'
+const libraryStorageKey = 'hongguo-tool-framework-library'
 const previewVideoUrl =
   'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4'
 
@@ -53,6 +60,11 @@ const logLevelOptions = ['全部', '信息', '警告', '错误'] as const
 const buildManifestFileName = () => {
   const stamp = new Date().toISOString().replaceAll(':', '-').replace(/\.\d+Z$/, 'Z')
   return `manual-sources-${stamp}.json`
+}
+
+const buildLibraryManifestFileName = () => {
+  const stamp = new Date().toISOString().replaceAll(':', '-').replace(/\.\d+Z$/, 'Z')
+  return `resource-library-${stamp}.json`
 }
 
 const buildLogExportFileName = () => {
@@ -165,7 +177,8 @@ const buildBrowserPreviewTask = (
 
 function App() {
   const initialManualSources = readStorage<ManualSourceRecord[]>(manualStorageKey, [])
-  const initialSeries = getCatalogFromAdapters(initialManualSources)
+  const initialDiscoveredSeries = readStorage<DiscoveredSeriesRecord[]>(libraryStorageKey, [])
+  const initialSeries = getCatalogFromAdapters(initialManualSources, initialDiscoveredSeries)
   const [desktopContext, setDesktopContext] =
     useState<DesktopContext>(fallbackDesktopContext)
   const [desktopSettings, setDesktopSettings] =
@@ -174,6 +187,8 @@ function App() {
   const [actionMessage, setActionMessage] = useState('')
   const [manualSources, setManualSources] =
     useState<ManualSourceRecord[]>(initialManualSources)
+  const [discoveredSeries, setDiscoveredSeries] =
+    useState<DiscoveredSeriesRecord[]>(initialDiscoveredSeries)
   const [browserQueue, setBrowserQueue] = useState<DesktopDownloadTask[]>(() =>
     readStorage(queueStorageKey, []),
   )
@@ -199,8 +214,8 @@ function App() {
   const [manualForm, setManualForm] = useState<ManualSourceForm>(defaultManualForm)
 
   const allSeries = useMemo(
-    () => getCatalogFromAdapters(manualSources),
-    [manualSources],
+    () => getCatalogFromAdapters(manualSources, discoveredSeries),
+    [discoveredSeries, manualSources],
   )
 
   const categories = useMemo(
@@ -335,6 +350,10 @@ function App() {
   useEffect(() => {
     window.localStorage.setItem(manualStorageKey, JSON.stringify(manualSources))
   }, [manualSources])
+
+  useEffect(() => {
+    window.localStorage.setItem(libraryStorageKey, JSON.stringify(discoveredSeries))
+  }, [discoveredSeries])
 
   useEffect(() => {
     if (!desktopContext.isElectron) {
@@ -675,6 +694,32 @@ function App() {
     }
   }
 
+  const handleExportDiscoveredSeries = async () => {
+    try {
+      const content = stringifyDiscoveredSeriesManifest(discoveredSeries)
+      const fileName = buildLibraryManifestFileName()
+
+      if (desktopContext.isElectron && window.desktopApi) {
+        const filePath = await window.desktopApi.saveTextFile({
+          defaultFileName: fileName,
+          content,
+        })
+
+        if (!filePath) {
+          return
+        }
+
+        setActionMessage(`资源库清单已导出到 ${filePath}`)
+        return
+      }
+
+      downloadTextFileInBrowser(fileName, content)
+      setActionMessage('资源库清单已在浏览器中导出。')
+    } catch (error) {
+      setActionMessage(error instanceof Error ? error.message : '导出资源库清单失败。')
+    }
+  }
+
   const handleImportManualSources = async () => {
     try {
       const rawContent =
@@ -695,6 +740,29 @@ function App() {
       setActionMessage(`已导入 ${imported.length} 条资源定义，按 id 自动合并。`)
     } catch (error) {
       setActionMessage(error instanceof Error ? error.message : '导入资源清单失败。')
+    }
+  }
+
+  const handleImportDiscoveredSeries = async () => {
+    try {
+      const rawContent =
+        desktopContext.isElectron && window.desktopApi
+          ? (await window.desktopApi.openTextFile())?.content ?? null
+          : await readTextFileInBrowser()
+
+      if (!rawContent) {
+        return
+      }
+
+      const imported = parseDiscoveredSeriesManifest(rawContent)
+      startTransition(() => {
+        setDiscoveredSeries((current) => mergeDiscoveredSeries(current, imported))
+        setActiveCategory('全部')
+        setSearchTerm('')
+      })
+      setActionMessage(`已导入 ${imported.length} 条资源库定义，按 id 自动合并。`)
+    } catch (error) {
+      setActionMessage(error instanceof Error ? error.message : '导入资源库清单失败。')
     }
   }
 
@@ -1336,6 +1404,31 @@ function App() {
                       )}
                     </div>
                   </div>
+                </div>
+              </section>
+
+              <section>
+                <div className="section-header">
+                  <div>
+                    <p className="eyebrow">资源发现</p>
+                    <h3>导入本地资源库清单</h3>
+                  </div>
+                  <span className="pill">本地 JSON 清单</span>
+                </div>
+
+                <div className="button-row">
+                  <button className="small" onClick={() => void handleImportDiscoveredSeries()}>
+                    导入资源库清单
+                  </button>
+                  <button className="small ghost" onClick={() => void handleExportDiscoveredSeries()}>
+                    导出资源库清单
+                  </button>
+                  <span className="pill">当前 {discoveredSeries.length} 条发现资源</span>
+                </div>
+
+                <div className="source-note">
+                  资源发现层适合一次导入多部剧的元数据与集列表。清单里只放你有权使用的资源定义，
+                  实际下载地址仍由适配器层解析，和下载执行层保持解耦。
                 </div>
               </section>
 

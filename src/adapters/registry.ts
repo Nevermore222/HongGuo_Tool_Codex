@@ -1,9 +1,11 @@
 import { mockCatalog } from '../catalog'
+import { buildDiscoveredSeries } from '../discoveredSources'
 import { demoLibraryAdapter } from './builtins/demoLibrary'
 import { manualTemplateAdapter } from './builtins/manualTemplate'
 import { customAdapters } from './custom'
 import { buildManualSeries } from './utils'
 import type { ManualSourceRecord, AdapterResolveInput, AdapterDefinition } from './types'
+import type { DiscoveredSeriesRecord } from '../discoveredSources'
 
 const builtInAdapters: AdapterDefinition[] = [
   demoLibraryAdapter,
@@ -14,7 +16,11 @@ export const adapterRegistry: Record<string, AdapterDefinition> = Object.fromEnt
   [...builtInAdapters, ...customAdapters].map((adapter) => [adapter.id, adapter]),
 )
 
-export const getCatalogFromAdapters = (manualSources: ManualSourceRecord[]) => [
+export const getCatalogFromAdapters = (
+  manualSources: ManualSourceRecord[],
+  discoveredSeries: DiscoveredSeriesRecord[] = [],
+) => [
+  ...discoveredSeries.map(buildDiscoveredSeries),
   ...manualSources.map(buildManualSeries),
   ...mockCatalog,
 ]
