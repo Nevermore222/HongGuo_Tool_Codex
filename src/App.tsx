@@ -19,6 +19,7 @@ import type { Episode, Resolution, Series } from './catalog'
 import type {
   DesktopContext,
   DesktopDownloadTask,
+  DesktopDownloadRecoverySummary,
   DesktopSettings,
 } from './desktop'
 import type { ManualSourceRecord } from './sourceAdapters'
@@ -108,6 +109,23 @@ const formatBytes = (bytes: number) => {
   }
 
   return `${size.toFixed(size >= 10 || index === 0 ? 0 : 1)} ${units[index]}`
+}
+
+const buildRecoveryMessage = (recoverySummary: DesktopDownloadRecoverySummary | null) => {
+  if (!recoverySummary || recoverySummary.restored === 0) {
+    return ''
+  }
+
+  const messages = [`已恢复 ${recoverySummary.restored} 条历史下载任务`]
+  if (recoverySummary.resumedAsWaiting > 0) {
+    messages.push(`${recoverySummary.resumedAsWaiting} 条任务已重置为等待中`)
+  }
+  if (recoverySummary.missingCompletedFiles > 0) {
+    messages.push(
+      `${recoverySummary.missingCompletedFiles} 条历史完成任务因文件缺失改为失败`,
+    )
+  }
+  return messages.join('，')
 }
 
 const buildBrowserPreviewTask = (
@@ -202,10 +220,11 @@ function App() {
         return
       }
 
-      const [context, settings, downloads] = await Promise.all([
+      const [context, settings, downloads, recovery] = await Promise.all([
         window.desktopApi.getContext(),
         window.desktopApi.getSettings(),
         window.desktopApi.getDownloads(),
+        window.desktopApi.getDownloadRecoverySummary(),
       ])
 
       if (disposed) {
@@ -223,6 +242,7 @@ function App() {
         setDesktopSettings(settings)
         setSelectedResolution(settings.preferredResolution)
         setDesktopDownloads(downloads)
+        setActionMessage(buildRecoveryMessage(recovery))
         setDesktopReady(true)
       })
     }
@@ -516,6 +536,59 @@ function App() {
     setBrowserQueue((current) => current.filter((item) => item.status !== '已完成'))
   }
 
+  const retryFailedDownloads = async () => {
+    if (desktopContext.isElectron && window.desktopApi) {
+      await window.desktopApi.retryFailedDownloads()
+      return
+    }
+
+    setBrowserQueue((current) =>
+      current.map((item) =>
+        item.status === '失败'
+          ? {
+              ...item,
+              status: '等待中',
+              progress: 0,
+              transferredBytes: 0,
+              totalBytes: 0,
+              errorMessage: '',
+            }
+          : item,
+      ),
+    )
+  }
+
+  const clearFailedDownloads = async () => {
+    if (desktopContext.isElectron && window.desktopApi) {
+      await window.desktopApi.clearFailedDownloads()
+      return
+    }
+
+    setBrowserQueue((current) => current.filter((item) => item.status !== '失败'))
+  }
+
+  const openDownloadFile = async (taskId: string) => {
+    if (!window.desktopApi) {
+      return
+    }
+
+    const result = await window.desktopApi.openDownloadFile(taskId)
+    if (result && result !== '') {
+      setActionMessage(result === 'missing-file' ? '文件不存在，可能已被移动或删除。' : '打开文件失败。')
+    }
+  }
+
+  const showDownloadInFolder = async (taskId: string) => {
+    if (!window.desktopApi) {
+      return
+    }
+
+    const success = await window.desktopApi.showDownloadInFolder(taskId)
+    if (!success) {
+      setActionMessage('无法定位文件，可能尚未下载完成或文件已不存在。')
+    }
+  }
+
   return (
     <>
       <div className="shell">
@@ -742,6 +815,18 @@ function App() {
               </div>
             </div>
 
+            <div className="button-row">
+              <button className="small" onClick={() => void retryFailedDownloads()}>
+                重试失败项
+              </button>
+              <button className="small ghost" onClick={() => void clearFailedDownloads()}>
+                清空失败项
+              </button>
+              <button className="small ghost" onClick={() => void clearCompleted()}>
+                清空已完成
+              </button>
+            </div>
+
             <div className="queue-list">
               {visibleQueue.length === 0 ? (
                 <div className="empty-state">
@@ -779,6 +864,22 @@ function App() {
                         {formatBytes(item.totalBytes)}
                       </span>
                     </div>
+                    {desktopContext.isElectron && item.status === '已完成' && item.outputPath ? (
+                      <div className="button-row queue-actions">
+                        <button
+                          className="small"
+                          onClick={() => void openDownloadFile(item.id)}
+                        >
+                          打开文件
+                        </button>
+                        <button
+                          className="small ghost"
+                          onClick={() => void showDownloadInFolder(item.id)}
+                        >
+                          打开所在位置
+                        </button>
+                      </div>
+                    ) : null}
                     {item.outputPath ? <div className="queue-path">{item.outputPath}</div> : null}
                   </article>
                 ))

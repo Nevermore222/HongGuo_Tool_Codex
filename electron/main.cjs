@@ -12,6 +12,8 @@ const downloadTasks = new Map()
 const activeDownloads = new Map()
 let schedulerActive = false
 let scheduleAgain = false
+let lastRecoverySummary = null
+let persistTasksTimer = null
 
 const defaultSettings = () => ({
   downloadDirectory: app.getPath('downloads'),
@@ -21,6 +23,7 @@ const defaultSettings = () => ({
 })
 
 const getSettingsPath = () => path.join(app.getPath('userData'), 'settings.json')
+const getTasksPath = () => path.join(app.getPath('userData'), 'download-tasks.json')
 
 const ensureSettings = async () => {
   const filePath = getSettingsPath()
@@ -48,6 +51,127 @@ const writeSettings = async (patch) => {
   return next
 }
 
+const persistDownloadTasks = async () => {
+  const payload = Array.from(downloadTasks.values()).map((task) => ({
+    id: task.id,
+    adapterId: task.adapterId,
+    seriesId: task.seriesId,
+    seriesTitle: task.seriesTitle,
+    episodeId: task.episodeId,
+    episodeTitle: task.episodeTitle,
+    resolution: task.resolution,
+    sourceUrl: task.sourceUrl,
+    fileName: task.fileName,
+    outputPath: task.outputPath,
+    progress: task.progress,
+    transferredBytes: task.transferredBytes,
+    totalBytes: task.totalBytes,
+    status: task.status,
+    errorMessage: task.errorMessage,
+    createdAt: task.createdAt,
+  }))
+
+  await fsp.mkdir(path.dirname(getTasksPath()), { recursive: true })
+  await fsp.writeFile(getTasksPath(), JSON.stringify(payload, null, 2), 'utf8')
+}
+
+const schedulePersistDownloadTasks = () => {
+  if (persistTasksTimer) {
+    clearTimeout(persistTasksTimer)
+  }
+
+  persistTasksTimer = setTimeout(() => {
+    persistTasksTimer = null
+    void persistDownloadTasks()
+  }, 180)
+}
+
+const fileExists = async (targetPath) => {
+  if (!targetPath) {
+    return false
+  }
+
+  try {
+    await fsp.access(targetPath)
+    return true
+  } catch {
+    return false
+  }
+}
+
+const restoreDownloadTasks = async () => {
+  const summary = {
+    restored: 0,
+    resumedAsWaiting: 0,
+    missingCompletedFiles: 0,
+  }
+
+  try {
+    const raw = await fsp.readFile(getTasksPath(), 'utf8')
+    const parsed = JSON.parse(raw)
+
+    if (!Array.isArray(parsed)) {
+      lastRecoverySummary = summary
+      return
+    }
+
+    for (const item of parsed) {
+      const task = {
+        id: item.id,
+        adapterId: item.adapterId,
+        seriesId: item.seriesId,
+        seriesTitle: item.seriesTitle,
+        episodeId: item.episodeId,
+        episodeTitle: item.episodeTitle,
+        resolution: item.resolution,
+        sourceUrl: item.sourceUrl,
+        fileName: item.fileName,
+        outputPath: item.outputPath || '',
+        progress: Number(item.progress) || 0,
+        transferredBytes: Number(item.transferredBytes) || 0,
+        totalBytes: Number(item.totalBytes) || 0,
+        status: item.status || '等待中',
+        errorMessage: item.errorMessage || '',
+        createdAt: Number(item.createdAt) || Date.now() + downloadTasks.size,
+      }
+
+      if (task.status === '已完成') {
+        const exists = await fileExists(task.outputPath)
+        if (!exists) {
+          task.status = '失败'
+          task.errorMessage = '历史任务对应的已下载文件不存在，请重新下载。'
+          task.outputPath = ''
+          task.progress = 0
+          task.transferredBytes = 0
+          task.totalBytes = 0
+          summary.missingCompletedFiles += 1
+        }
+      } else {
+        if (await fileExists(task.outputPath)) {
+          await fsp.rm(task.outputPath, { force: true })
+        }
+
+        if (task.status === '下载中' || task.status === '等待中') {
+          task.status = '等待中'
+          task.errorMessage = '应用重启后已恢复为等待中。'
+          summary.resumedAsWaiting += 1
+        }
+
+        task.outputPath = ''
+        task.progress = 0
+        task.transferredBytes = 0
+        task.totalBytes = 0
+      }
+
+      downloadTasks.set(task.id, task)
+      summary.restored += 1
+    }
+  } catch {}
+
+  lastRecoverySummary = summary
+  schedulePersistDownloadTasks()
+}
+
 const listTaskSnapshots = () =>
   Array.from(downloadTasks.values())
     .sort((left, right) => left.createdAt - right.createdAt)
@@ -71,6 +195,7 @@ const listTaskSnapshots = () =>
 
 const broadcastDownloads = () => {
   const payload = listTaskSnapshots()
+  schedulePersistDownloadTasks()
   for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send('downloads:changed', payload)
   }
@@ -359,6 +484,8 @@ ipcMain.handle('desktop:get-context', async () => ({
   userDataPath: app.getPath('userData'),
 }))
 
+ipcMain.handle('downloads:get-recovery-summary', async () => lastRecoverySummary)
+
 ipcMain.handle('settings:read', async () => ensureSettings())
 
 ipcMain.handle('settings:update', async (_event, patch) => {
@@ -494,6 +621,23 @@ ipcMain.handle('downloads:resume', async (_event, taskId) => {
   return listTaskSnapshots()
 })
 
+ipcMain.handle('downloads:retry-failed', async () => {
+  for (const task of downloadTasks.values()) {
+    if (task.status === '失败') {
+      task.status = '等待中'
+      task.progress = 0
+      task.transferredBytes = 0
+      task.totalBytes = 0
+      task.outputPath = ''
+      task.errorMessage = ''
+    }
+  }
+
+  broadcastDownloads()
+  void maybeStartDownloads()
+  return listTaskSnapshots()
+})
+
 ipcMain.handle('downloads:clear-completed', async () => {
   for (const [taskId, task] of downloadTasks.entries()) {
     if (task.status === '已完成') {
@@ -505,9 +649,49 @@ ipcMain.handle('downloads:clear-completed', async () => {
   return listTaskSnapshots()
 })
 
+ipcMain.handle('downloads:clear-failed', async () => {
+  for (const [taskId, task] of downloadTasks.entries()) {
+    if (task.status === '失败') {
+      downloadTasks.delete(taskId)
+    }
+  }
+
+  broadcastDownloads()
+  return listTaskSnapshots()
+})
+
+ipcMain.handle('downloads:open-file', async (_event, taskId) => {
+  const task = downloadTasks.get(taskId)
+  if (!task?.outputPath) {
+    return 'missing-path'
+  }
+
+  if (!(await fileExists(task.outputPath))) {
+    return 'missing-file'
+  }
+
+  return shell.openPath(task.outputPath)
+})
+
+ipcMain.handle('downloads:show-in-folder', async (_event, taskId) => {
+  const task = downloadTasks.get(taskId)
+  if (!task?.outputPath) {
+    return false
+  }
+
+  if (!(await fileExists(task.outputPath))) {
+    return false
+  }
+
+  shell.showItemInFolder(task.outputPath)
+  return true
+})
+
 app.whenReady().then(async () => {
   await ensureSettings()
+  await restoreDownloadTasks()
   await createWindow()
+  void maybeStartDownloads()
 
   app.on('activate', async () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -520,4 +704,12 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+app.on('before-quit', () => {
+  if (persistTasksTimer) {
+    clearTimeout(persistTasksTimer)
+    persistTasksTimer = null
+  }
+  void persistDownloadTasks()
 })

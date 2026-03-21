@@ -1,6 +1,7 @@
 import type {
   DesktopContext,
   DesktopDownloadTask,
+  DesktopDownloadRecoverySummary,
   DesktopSettings,
   EnqueueDownloadInput,
   OpenTextFileResult,
@@ -21,12 +22,17 @@ type DesktopApi = {
   ) => Promise<DesktopDownloadTask[]>
   pauseDownload: (taskId: string) => Promise<DesktopDownloadTask[]>
   resumeDownload: (taskId: string) => Promise<DesktopDownloadTask[]>
+  retryFailedDownloads: () => Promise<DesktopDownloadTask[]>
   clearCompletedDownloads: () => Promise<DesktopDownloadTask[]>
+  clearFailedDownloads: () => Promise<DesktopDownloadTask[]>
+  openDownloadFile: (taskId: string) => Promise<string>
+  showDownloadInFolder: (taskId: string) => Promise<boolean>
   openTextFile: () => Promise<OpenTextFileResult | null>
   saveTextFile: (input: {
     defaultFileName: string
     content: string
   }) => Promise<string | null>
+  getDownloadRecoverySummary: () => Promise<DesktopDownloadRecoverySummary | null>
   onDownloadsChanged: (
     callback: (tasks: DesktopDownloadTask[]) => void,
   ) => () => void

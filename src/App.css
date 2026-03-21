@@ -374,6 +374,10 @@ button:disabled {
   line-break: anywhere;
 }
 
+.queue-actions {
+  margin-top: 10px;
+}
+
 .path-box {
   padding: 14px 16px;
   border-radius: 16px;

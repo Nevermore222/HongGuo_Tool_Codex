@@ -56,6 +56,12 @@ export type OpenTextFileResult = {
   content: string
 }
 
+export type DesktopDownloadRecoverySummary = {
+  restored: number
+  resumedAsWaiting: number
+  missingCompletedFiles: number
+}
+
 export const fallbackDesktopContext: DesktopContext = {
   isElectron: false,
   platform: 'web',
