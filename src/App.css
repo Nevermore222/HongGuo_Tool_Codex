@@ -1,0 +1,394 @@
+.shell {
+  display: grid;
+  gap: 24px;
+  padding: 28px;
+}
+
+.topbar,
+.hero-panel,
+.workspace,
+.bottom-grid {
+  display: grid;
+  gap: 20px;
+}
+
+.topbar {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+}
+
+.topbar-actions,
+.hero-metrics,
+.section-header,
+.series-row,
+.series-meta,
+.detail-actions,
+.tag-row,
+.episode-row,
+.episode-actions,
+.queue-head,
+.queue-foot,
+.split,
+.queue-stats {
+  display: flex;
+  gap: 12px;
+}
+
+.topbar-actions,
+.hero-metrics,
+.detail-actions,
+.episode-actions,
+.queue-stats {
+  flex-wrap: wrap;
+}
+
+.hero-panel,
+.card,
+.series-card,
+.detail-panel,
+.modal {
+  background: rgba(15, 23, 42, 0.72);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  box-shadow: 0 24px 60px rgba(2, 6, 23, 0.35);
+  backdrop-filter: blur(18px);
+}
+
+.hero-panel {
+  grid-template-columns: minmax(0, 1.7fr) minmax(280px, 1fr);
+  padding: 24px;
+  border-radius: 28px;
+}
+
+.hero-copy p {
+  max-width: 720px;
+  color: var(--muted);
+}
+
+.hero-metrics {
+  justify-content: flex-end;
+}
+
+.metric-card {
+  min-width: 140px;
+  padding: 18px;
+  border-radius: 22px;
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.9) 0%, rgba(15, 23, 42, 0.7) 100%);
+  border: 1px solid rgba(96, 165, 250, 0.18);
+}
+
+.metric-card span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.metric-card strong {
+  display: block;
+  margin-top: 12px;
+  font-size: 2rem;
+  color: var(--text-strong);
+}
+
+.workspace {
+  grid-template-columns: 280px minmax(0, 1.15fr) minmax(360px, 0.95fr);
+  align-items: start;
+}
+
+.bottom-grid {
+  grid-template-columns: minmax(0, 1.2fr) minmax(360px, 0.8fr);
+}
+
+.sidebar,
+.catalog-panel,
+.detail-panel {
+  display: grid;
+  gap: 20px;
+}
+
+.card,
+.detail-panel,
+.catalog-panel {
+  border-radius: 24px;
+  padding: 20px;
+}
+
+.section-label,
+.field span {
+  display: block;
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.section-meta,
+.queue-stats span,
+.detail-copy,
+.source-note,
+.modal-note,
+.tips li,
+.series-card p,
+.queue-head p {
+  color: var(--muted);
+}
+
+.search-input,
+.field input,
+.field textarea {
+  width: 100%;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(15, 23, 42, 0.55);
+  color: var(--text-strong);
+  padding: 14px 16px;
+  border-radius: 16px;
+  outline: none;
+  box-sizing: border-box;
+}
+
+.field textarea {
+  min-height: 96px;
+  resize: vertical;
+}
+
+.category-list,
+.catalog-list,
+.episode-list,
+.queue-list {
+  display: grid;
+  gap: 12px;
+}
+
+.category {
+  width: 100%;
+  text-align: left;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid transparent;
+  background: rgba(30, 41, 59, 0.7);
+  color: var(--text);
+}
+
+.category.active,
+.resolution.active,
+.series-card.active,
+.small:not(.ghost),
+.primary,
+.submit {
+  border-color: rgba(96, 165, 250, 0.3);
+  background: linear-gradient(135deg, rgba(29, 78, 216, 0.95) 0%, rgba(12, 74, 110, 0.95) 100%);
+  color: #eff6ff;
+}
+
+.series-card {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 14px;
+  padding: 14px;
+  border-radius: 22px;
+  text-align: left;
+}
+
+.poster,
+.detail-poster {
+  border-radius: 18px;
+  background-size: cover;
+  background-position: center;
+}
+
+.poster {
+  min-height: 118px;
+}
+
+.detail-head {
+  display: grid;
+  grid-template-columns: 108px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.detail-poster {
+  min-height: 144px;
+}
+
+.status-tag,
+.tag,
+.pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.status-tag,
+.tag,
+.pill {
+  color: var(--text-strong);
+  background: rgba(30, 41, 59, 0.8);
+}
+
+.pill-warn {
+  color: #fde68a;
+  border-color: rgba(250, 204, 21, 0.25);
+  background: rgba(120, 53, 15, 0.48);
+}
+
+.resolution-switch {
+  display: inline-flex;
+  gap: 10px;
+}
+
+button {
+  cursor: pointer;
+  transition:
+    transform 160ms ease,
+    border-color 160ms ease,
+    background 160ms ease;
+}
+
+button:hover {
+  transform: translateY(-1px);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.primary,
+.secondary,
+.small,
+.resolution {
+  border-radius: 14px;
+  padding: 11px 16px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(30, 41, 59, 0.75);
+  color: var(--text-strong);
+}
+
+.secondary,
+.ghost {
+  background: rgba(15, 23, 42, 0.6);
+}
+
+.small {
+  padding: 9px 12px;
+  font-size: 0.92rem;
+}
+
+.source-note,
+.empty-state {
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(15, 23, 42, 0.48);
+  border: 1px dashed rgba(148, 163, 184, 0.2);
+}
+
+.episode-row,
+.queue-row {
+  padding: 14px;
+  border-radius: 18px;
+  background: rgba(15, 23, 42, 0.56);
+  border: 1px solid rgba(148, 163, 184, 0.12);
+}
+
+.episode-row {
+  justify-content: space-between;
+  align-items: center;
+}
+
+.episode-meta {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.progress-track {
+  margin-top: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(51, 65, 85, 0.85);
+  overflow: hidden;
+}
+
+.progress-bar {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #22c55e 0%, #38bdf8 100%);
+}
+
+.queue-foot {
+  justify-content: space-between;
+  margin-top: 8px;
+  font-size: 0.92rem;
+}
+
+.field {
+  display: block;
+}
+
+.submit {
+  width: 100%;
+  margin-top: 4px;
+}
+
+.tips ul {
+  margin: 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 10px;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(2, 6, 23, 0.7);
+}
+
+.modal {
+  width: min(780px, 100%);
+  padding: 20px;
+  border-radius: 24px;
+}
+
+.preview-player {
+  width: 100%;
+  border-radius: 18px;
+  margin-top: 18px;
+  background: #020617;
+}
+
+@media (max-width: 1200px) {
+  .workspace,
+  .bottom-grid,
+  .hero-panel,
+  .topbar {
+    grid-template-columns: 1fr;
+  }
+
+  .hero-metrics {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 760px) {
+  .shell {
+    padding: 16px;
+  }
+
+  .detail-head,
+  .series-card {
+    grid-template-columns: 1fr;
+  }
+
+  .episode-row,
+  .queue-head,
+  .section-header {
+    display: grid;
+  }
+}
