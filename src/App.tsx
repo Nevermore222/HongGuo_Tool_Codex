@@ -1364,7 +1364,7 @@ function App() {
     <>
       <div className="shell">
         <header className="topbar">
-          <div>
+          <div className="topbar-title">
             <p className="eyebrow">HongGuo Tool Framework</p>
             <h1>短剧资源下载桌面工具</h1>
           </div>
