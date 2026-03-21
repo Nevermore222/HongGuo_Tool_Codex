@@ -46,11 +46,20 @@ type DiscoveryApiForm = {
   headersText: string
 }
 
+type DiscoveryEndpointConfig = {
+  id: string
+  name: string
+  endpointUrl: string
+  headersText: string
+  lastUsedAt: string
+}
+
 const queueStorageKey = 'hongguo-tool-framework-queue'
 const manualStorageKey = 'hongguo-tool-framework-manual'
 const libraryStorageKey = 'hongguo-tool-framework-library'
 const discoveryApiConfigKey = 'hongguo-tool-framework-discovery-api-config'
 const discoveryApiCacheKey = 'hongguo-tool-framework-discovery-api-cache'
+const discoverySourcesKey = 'hongguo-tool-framework-discovery-sources'
 const previewVideoUrl =
   'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4'
 
@@ -66,6 +75,9 @@ const defaultDiscoveryApiForm: DiscoveryApiForm = {
   endpointUrl: '',
   headersText: '{\n  "Authorization": "Bearer your-token"\n}',
 }
+
+const buildDiscoverySourceId = () =>
+  `discovery-source-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`
 
 const queueStatusOptions = ['全部', '等待中', '下载中', '已完成', '已暂停', '失败'] as const
 const logLevelOptions = ['全部', '信息', '警告', '错误'] as const
@@ -210,6 +222,10 @@ function App() {
     discoveryApiConfigKey,
     defaultDiscoveryApiForm,
   )
+  const initialDiscoverySources = readStorage<DiscoveryEndpointConfig[]>(
+    discoverySourcesKey,
+    [],
+  )
   const initialDiscoveryCache = readStorage<DiscoveryCacheSnapshot | null>(
     discoveryApiCacheKey,
     null,
@@ -227,6 +243,8 @@ function App() {
     useState<DiscoveredSeriesRecord[]>(initialDiscoveredSeries)
   const [discoveryApiForm, setDiscoveryApiForm] =
     useState<DiscoveryApiForm>(initialDiscoveryApiForm)
+  const [discoverySources, setDiscoverySources] =
+    useState<DiscoveryEndpointConfig[]>(initialDiscoverySources)
   const [discoveryCache, setDiscoveryCache] =
     useState<DiscoveryCacheSnapshot | null>(initialDiscoveryCache)
   const [discoverySyncing, setDiscoverySyncing] = useState(false)
@@ -257,6 +275,15 @@ function App() {
   const allSeries = useMemo(
     () => getCatalogFromAdapters(manualSources, discoveredSeries),
     [discoveredSeries, manualSources],
+  )
+
+  const sortedDiscoverySources = useMemo(
+    () =>
+      [...discoverySources].sort(
+        (left, right) =>
+          new Date(right.lastUsedAt).getTime() - new Date(left.lastUsedAt).getTime(),
+      ),
+    [discoverySources],
   )
 
   const categories = useMemo(
@@ -406,6 +433,13 @@ function App() {
       JSON.stringify(discoveryApiForm),
     )
   }, [discoveryApiForm])
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      discoverySourcesKey,
+      JSON.stringify(discoverySources),
+    )
+  }, [discoverySources])
 
   useEffect(() => {
     window.localStorage.setItem(
@@ -825,6 +859,85 @@ function App() {
     }
   }
 
+  const saveCurrentDiscoverySource = () => {
+    const endpointUrl = discoveryApiForm.endpointUrl.trim()
+    if (!endpointUrl) {
+      setActionMessage('请先填写内部资源 API 地址，再保存来源配置。')
+      return
+    }
+
+    let parsedUrl: URL | null = null
+    try {
+      parsedUrl = new URL(endpointUrl)
+    } catch {
+      parsedUrl = null
+    }
+
+    const nextEntry: DiscoveryEndpointConfig = {
+      id: buildDiscoverySourceId(),
+      name: parsedUrl ? `${parsedUrl.hostname}${parsedUrl.pathname}` : endpointUrl,
+      endpointUrl,
+      headersText: discoveryApiForm.headersText,
+      lastUsedAt: new Date().toISOString(),
+    }
+
+    startTransition(() => {
+      setDiscoverySources((current) => {
+        const existingIndex = current.findIndex(
+          (item) => item.endpointUrl === nextEntry.endpointUrl,
+        )
+
+        if (existingIndex >= 0) {
+          const updated = [...current]
+          updated[existingIndex] = {
+            ...updated[existingIndex],
+            headersText: nextEntry.headersText,
+            lastUsedAt: nextEntry.lastUsedAt,
+          }
+          return updated
+        }
+
+        return [nextEntry, ...current]
+      })
+    })
+
+    setActionMessage('已保存当前资源发现源配置。')
+  }
+
+  const loadDiscoverySource = (source: DiscoveryEndpointConfig) => {
+    startTransition(() => {
+      setDiscoveryApiForm({
+        endpointUrl: source.endpointUrl,
+        headersText: source.headersText,
+      })
+    })
+    setActionMessage(`已切换到资源发现源 ${source.name}。`)
+  }
+
+  const removeDiscoverySource = (sourceId: string) => {
+    startTransition(() => {
+      setDiscoverySources((current) => current.filter((item) => item.id !== sourceId))
+    })
+    setActionMessage('已删除该资源发现源配置。')
+  }
+
+  const touchDiscoverySource = (endpointUrl: string, headersText: string) => {
+    setDiscoverySources((current) => {
+      const existingIndex = current.findIndex((item) => item.endpointUrl === endpointUrl)
+      if (existingIndex < 0) {
+        return current
+      }
+
+      const updated = [...current]
+      updated[existingIndex] = {
+        ...updated[existingIndex],
+        headersText,
+        lastUsedAt: new Date().toISOString(),
+      }
+      return updated
+    })
+  }
+
   const syncDiscoveredSeriesFromApi = async () => {
     try {
       const endpointUrl = discoveryApiForm.endpointUrl.trim()
@@ -864,6 +977,7 @@ function App() {
         setActiveCategory('全部')
         setSearchTerm('')
       })
+      touchDiscoverySource(endpointUrl, discoveryApiForm.headersText)
       setActionMessage(`已从 API 同步 ${imported.length} 条资源库定义，并缓存到本地。`)
     } catch (error) {
       setActionMessage(error instanceof Error ? error.message : '同步资源库失败。')
@@ -895,6 +1009,55 @@ function App() {
       setActionMessage(`已从本地缓存恢复 ${imported.length} 条资源库定义。`)
     } catch (error) {
       setActionMessage(error instanceof Error ? error.message : '恢复资源库缓存失败。')
+    }
+  }
+
+  const syncDiscoverySource = async (source: DiscoveryEndpointConfig) => {
+    startTransition(() => {
+      setDiscoveryApiForm({
+        endpointUrl: source.endpointUrl,
+        headersText: source.headersText,
+      })
+    })
+
+    try {
+      setDiscoverySyncing(true)
+      const headers = parseDiscoveryHeaders(source.headersText)
+      let snapshot: DiscoveryCacheSnapshot
+
+      if (desktopContext.isElectron && window.desktopApi) {
+        snapshot = await window.desktopApi.fetchDiscoveryManifest({
+          endpointUrl: source.endpointUrl,
+          headers,
+        })
+      } else {
+        const response = await fetch(source.endpointUrl, { headers })
+        const content = await response.text()
+        if (!response.ok) {
+          throw new Error(`拉取资源库失败：HTTP ${response.status}`)
+        }
+
+        snapshot = {
+          endpointUrl: source.endpointUrl,
+          fetchedAt: new Date().toISOString(),
+          cachePath: 'browser-localStorage',
+          content,
+        }
+      }
+
+      const imported = parseDiscoveredSeriesManifest(snapshot.content)
+      startTransition(() => {
+        setDiscoveredSeries((current) => mergeDiscoveredSeries(current, imported))
+        setDiscoveryCache(snapshot)
+        setActiveCategory('全部')
+        setSearchTerm('')
+      })
+      touchDiscoverySource(source.endpointUrl, source.headersText)
+      setActionMessage(`已通过已保存源 ${source.name} 同步 ${imported.length} 条资源库定义。`)
+    } catch (error) {
+      setActionMessage(error instanceof Error ? error.message : '同步资源库失败。')
+    } finally {
+      setDiscoverySyncing(false)
     }
   }
 
@@ -1597,6 +1760,12 @@ function App() {
                     </button>
                     <button
                       className="small ghost"
+                      onClick={() => saveCurrentDiscoverySource()}
+                    >
+                      保存为来源
+                    </button>
+                    <button
+                      className="small ghost"
                       onClick={() => void restoreDiscoveredSeriesFromCache()}
                     >
                       从缓存恢复
@@ -1620,6 +1789,53 @@ function App() {
                     </article>
                   </div>
                 ) : null}
+
+                <div className="stats-card">
+                  <div className="section-header compact">
+                    <div>
+                      <span className="section-label">已保存的资源发现源</span>
+                    </div>
+                    <span className="section-meta">共 {sortedDiscoverySources.length} 个</span>
+                  </div>
+                  <div className="stats-list">
+                    {sortedDiscoverySources.length === 0 ? (
+                      <div className="empty-state">
+                        还没有保存的来源配置。先填写 API 地址和请求头，再点“保存为来源”。
+                      </div>
+                    ) : (
+                      sortedDiscoverySources.map((source) => (
+                        <article key={source.id} className="stats-row">
+                          <div>
+                            <strong>{source.name}</strong>
+                            <p>{source.endpointUrl}</p>
+                            <p>最近使用：{formatUpdatedAt(source.lastUsedAt)}</p>
+                          </div>
+                          <div className="button-row inline-actions">
+                            <button
+                              className="small ghost"
+                              onClick={() => loadDiscoverySource(source)}
+                            >
+                              载入
+                            </button>
+                            <button
+                              className="small"
+                              onClick={() => void syncDiscoverySource(source)}
+                              disabled={discoverySyncing}
+                            >
+                              同步
+                            </button>
+                            <button
+                              className="small ghost"
+                              onClick={() => removeDiscoverySource(source.id)}
+                            >
+                              删除
+                            </button>
+                          </div>
+                        </article>
+                      ))
+                    )}
+                  </div>
+                </div>
 
                 <div className="source-note">
                   资源发现层适合一次导入多部剧的元数据与集列表。清单里只放你有权使用的资源定义，

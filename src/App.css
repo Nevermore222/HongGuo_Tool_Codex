@@ -506,6 +506,11 @@ button:disabled {
   flex-wrap: wrap;
 }
 
+.inline-actions {
+  margin-top: 0;
+  justify-content: flex-end;
+}
+
 .info-grid {
   display: grid;
   gap: 12px;
