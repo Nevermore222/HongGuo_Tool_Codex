@@ -32,6 +32,7 @@
 - 手动资源模板录入
 - 手动资源清单 JSON 导入 / 导出
 - 本地资源库清单 JSON 导入 / 导出
+- 从内部 HTTP API 同步资源库并缓存到本地
 - 浏览器模式下的队列模拟预览
 
 ## 合规边界
@@ -252,6 +253,10 @@ D:\media\series-{episodeIndex}.mp4
 - 按 `id` 合并
 - 缺少 `title`、`adapterId` 或 `sourceId` 的条目会被判定为无效
 - `episodes` 可选，不写全时界面会自动补齐剩余集数
+
+内部 HTTP API 如果要接入，直接返回同样的 JSON 结构即可。
+Electron 模式下，最近一次成功拉取的响应会缓存到用户数据目录中的
+`discovery-library-cache.json`，界面支持“从缓存恢复”。
 
 ## 手动资源清单
 

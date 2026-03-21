@@ -1,4 +1,5 @@
 import type { Resolution } from './catalog'
+import type { DiscoveredSeriesRecord } from './discoveredSources'
 
 export type DesktopContext = {
   isElectron: boolean
@@ -76,6 +77,25 @@ export type DesktopDownloadRecoverySummary = {
   restored: number
   resumedAsWaiting: number
   missingCompletedFiles: number
+}
+
+export type DiscoverySyncInput = {
+  endpointUrl: string
+  headers: Record<string, string>
+}
+
+export type DiscoveryCacheSnapshot = {
+  endpointUrl: string
+  fetchedAt: string
+  cachePath: string
+  content: string
+}
+
+export type DiscoveryCatalogSnapshot = {
+  endpointUrl: string
+  fetchedAt: string
+  cachePath: string
+  series: DiscoveredSeriesRecord[]
 }
 
 export const fallbackDesktopContext: DesktopContext = {

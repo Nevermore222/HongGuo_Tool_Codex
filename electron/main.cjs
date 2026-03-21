@@ -28,6 +28,8 @@ const defaultSettings = () => ({
 const getSettingsPath = () => path.join(app.getPath('userData'), 'settings.json')
 const getTasksPath = () => path.join(app.getPath('userData'), 'download-tasks.json')
 const getLogsPath = () => path.join(app.getPath('userData'), 'download-logs.json')
+const getDiscoveryCachePath = () =>
+  path.join(app.getPath('userData'), 'discovery-library-cache.json')
 
 const ensureSettings = async () => {
   const filePath = getSettingsPath()
@@ -211,6 +213,54 @@ const restoreDownloadLogs = async () => {
       })
     }
   } catch {}
+}
+
+const readDiscoveryCache = async () => {
+  try {
+    const raw = await fsp.readFile(getDiscoveryCachePath(), 'utf8')
+    const parsed = JSON.parse(raw)
+
+    if (
+      !parsed ||
+      typeof parsed !== 'object' ||
+      typeof parsed.content !== 'string' ||
+      typeof parsed.fetchedAt !== 'string' ||
+      typeof parsed.endpointUrl !== 'string'
+    ) {
+      return null
+    }
+
+    return {
+      endpointUrl: parsed.endpointUrl,
+      fetchedAt: parsed.fetchedAt,
+      cachePath: getDiscoveryCachePath(),
+      content: parsed.content,
+    }
+  } catch {
+    return null
+  }
+}
+
+const writeDiscoveryCache = async ({ endpointUrl, content }) => {
+  const payload = {
+    endpointUrl,
+    fetchedAt: new Date().toISOString(),
+    content,
+  }
+
+  await fsp.mkdir(path.dirname(getDiscoveryCachePath()), { recursive: true })
+  await fsp.writeFile(
+    getDiscoveryCachePath(),
+    JSON.stringify(payload, null, 2),
+    'utf8',
+  )
+
+  return {
+    endpointUrl: payload.endpointUrl,
+    fetchedAt: payload.fetchedAt,
+    cachePath: getDiscoveryCachePath(),
+    content: payload.content,
+  }
 }
 
 const restoreDownloadTasks = async () => {
@@ -759,6 +809,45 @@ ipcMain.handle('files:save-text', async (_event, input) => {
   await fsp.writeFile(result.filePath, input.content, 'utf8')
   return result.filePath
 })
+
+ipcMain.handle('discovery:fetch-remote', async (_event, input) => {
+  const endpointUrl = String(input?.endpointUrl || '').trim()
+  const headers =
+    input?.headers && typeof input.headers === 'object' ? input.headers : {}
+
+  if (!endpointUrl) {
+    throw new Error('请输入内部资源 API 地址。')
+  }
+
+  let response
+  try {
+    response = await fetch(endpointUrl, {
+      headers,
+      signal: AbortSignal.timeout(15000),
+    })
+  } catch (error) {
+    throw new Error(
+      error instanceof Error ? `拉取资源库失败：${error.message}` : '拉取资源库失败。',
+    )
+  }
+
+  const content = await response.text()
+
+  if (!response.ok) {
+    throw new Error(
+      `拉取资源库失败：HTTP ${response.status}${
+        content ? `，响应内容：${content.slice(0, 180)}` : ''
+      }`,
+    )
+  }
+
+  return writeDiscoveryCache({
+    endpointUrl,
+    content,
+  })
+})
+
+ipcMain.handle('discovery:read-cache', async () => readDiscoveryCache())
 
 ipcMain.handle('downloads:list', async () => listTaskSnapshots())
 ipcMain.handle('download-logs:list', async () => listDownloadLogSnapshots())

@@ -1,4 +1,6 @@
 import type {
+  DiscoveryCacheSnapshot,
+  DiscoverySyncInput,
   DesktopContext,
   DesktopDownloadLogEntry,
   DesktopDownloadTask,
@@ -35,6 +37,10 @@ type DesktopApi = {
     defaultFileName: string
     content: string
   }) => Promise<string | null>
+  fetchDiscoveryManifest: (
+    input: DiscoverySyncInput,
+  ) => Promise<DiscoveryCacheSnapshot>
+  getCachedDiscoveryManifest: () => Promise<DiscoveryCacheSnapshot | null>
   getDownloadRecoverySummary: () => Promise<DesktopDownloadRecoverySummary | null>
   onDownloadsChanged: (
     callback: (tasks: DesktopDownloadTask[]) => void,

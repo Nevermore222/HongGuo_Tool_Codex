@@ -20,6 +20,8 @@ contextBridge.exposeInMainWorld('desktopApi', {
   showDownloadInFolder: (taskId) => ipcRenderer.invoke('downloads:show-in-folder', taskId),
   openTextFile: () => ipcRenderer.invoke('files:open-text'),
   saveTextFile: (input) => ipcRenderer.invoke('files:save-text', input),
+  fetchDiscoveryManifest: (input) => ipcRenderer.invoke('discovery:fetch-remote', input),
+  getCachedDiscoveryManifest: () => ipcRenderer.invoke('discovery:read-cache'),
   getDownloadRecoverySummary: () => ipcRenderer.invoke('downloads:get-recovery-summary'),
   onDownloadsChanged: (callback) => {
     const listener = (_event, tasks) => callback(tasks)
