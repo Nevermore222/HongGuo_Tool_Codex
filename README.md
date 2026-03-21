@@ -34,6 +34,12 @@
 - `demo-library`: 返回公开演示视频直链，用于验证整个下载链路
 - `manual-template`: 把手动录入的模板解析成最终下载地址，是后续换源时最接近业务的一层
 
+开发参考文件：
+
+- 模板：[custom-direct-file.adapter.template.ts](/D:/HongGuo_AutoTools/adapter-templates/custom-direct-file.adapter.template.ts)
+- 示例：[team-library.adapter.example.ts](/D:/HongGuo_AutoTools/adapter-examples/team-library.adapter.example.ts)
+- 文档：[adapter-development.md](/D:/HongGuo_AutoTools/docs/adapter-development.md)
+
 统一适配输出为：
 
 - `taskId`
