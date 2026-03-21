@@ -1,28 +1,23 @@
 import { useDeferredValue, useEffect, useMemo, useState, startTransition } from 'react'
 import './App.css'
-import { mockCatalog } from './catalog'
 import {
   fallbackDesktopContext,
   fallbackDesktopSettings,
   isDesktopShellAvailable,
 } from './desktop'
+import {
+  getAdapterOptions,
+  getCatalogFromAdapters,
+  resolveEpisodeDownload,
+} from './sourceAdapters'
 import type { Episode, Resolution, Series } from './catalog'
-import type { DesktopContext, DesktopSettings } from './desktop'
+import type {
+  DesktopContext,
+  DesktopDownloadTask,
+  DesktopSettings,
+} from './desktop'
+import type { ManualSourceRecord } from './sourceAdapters'
 import type { FormEvent } from 'react'
-
-type QueueStatus = '等待中' | '下载中' | '已完成' | '已暂停'
-
-type QueueItem = {
-  id: string
-  seriesId: string
-  seriesTitle: string
-  episodeId: string
-  episodeTitle: string
-  resolution: Resolution
-  progress: number
-  status: QueueStatus
-  sourceType: 'mock' | 'manual'
-}
 
 type ManualSourceForm = {
   title: string
@@ -58,58 +53,81 @@ const readStorage = <T,>(key: string, fallback: T): T => {
   }
 }
 
-const categories = ['全部', ...new Set(mockCatalog.map((item) => item.category)), '手动导入']
-
-const buildManualSeries = (form: ManualSourceForm): Series => ({
-  id: `manual-${Date.now()}`,
-  title: form.title.trim(),
-  category: form.category.trim() || '手动导入',
-  status: '手动导入',
-  description: '你手动录入的合法资源，仅在本地保存元信息，不包含任何平台解析逻辑。',
-  tags: ['手动导入', '本地配置'],
-  totalEpisodes: Number(form.totalEpisodes),
-  updatedAt: '刚刚',
-  posterGradient: 'linear-gradient(160deg, #0f172a 0%, #1d4ed8 100%)',
-  sourceNote: form.note.trim() || form.urlTemplate.trim() || '未填写资源说明',
-  episodes: Array.from({ length: Number(form.totalEpisodes) }, (_, index) => ({
-    id: `manual-${Date.now()}-${index + 1}`,
-    index: index + 1,
-    title: `第${index + 1}集`,
-    duration: '待补充',
-    sizeLabel: '待获取',
-    hasPreview: false,
-  })),
-})
-
 const formatUpdatedAt = (value: string) =>
   value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '尚未同步'
 
+const formatBytes = (bytes: number) => {
+  if (!bytes) {
+    return '0 B'
+  }
+
+  const units = ['B', 'KB', 'MB', 'GB']
+  let index = 0
+  let size = bytes
+
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024
+    index += 1
+  }
+
+  return `${size.toFixed(size >= 10 || index === 0 ? 0 : 1)} ${units[index]}`
+}
+
+const buildBrowserPreviewTask = (
+  series: Series,
+  episode: Episode,
+  resolution: Resolution,
+): DesktopDownloadTask => ({
+  id: `preview-${series.id}-${episode.id}-${resolution}`,
+  adapterId: series.adapterId,
+  seriesId: series.id,
+  seriesTitle: series.title,
+  episodeId: episode.id,
+  episodeTitle: episode.title,
+  resolution,
+  sourceUrl: previewVideoUrl,
+  fileName: `${series.title}-${episode.title}-${resolution}.mp4`,
+  outputPath: '',
+  progress: 0,
+  transferredBytes: 0,
+  totalBytes: 0,
+  status: '等待中',
+})
+
 function App() {
+  const initialManualSources = readStorage<ManualSourceRecord[]>(manualStorageKey, [])
+  const initialSeries = getCatalogFromAdapters(initialManualSources)
   const [desktopContext, setDesktopContext] =
     useState<DesktopContext>(fallbackDesktopContext)
   const [desktopSettings, setDesktopSettings] =
     useState<DesktopSettings>(fallbackDesktopSettings)
   const [desktopReady, setDesktopReady] = useState(false)
-  const [manualSeries, setManualSeries] = useState<Series[]>(() =>
-    readStorage(manualStorageKey, []),
-  )
-  const [queue, setQueue] = useState<QueueItem[]>(() =>
+  const [actionMessage, setActionMessage] = useState('')
+  const [manualSources, setManualSources] =
+    useState<ManualSourceRecord[]>(initialManualSources)
+  const [browserQueue, setBrowserQueue] = useState<DesktopDownloadTask[]>(() =>
     readStorage(queueStorageKey, []),
   )
+  const [desktopDownloads, setDesktopDownloads] = useState<DesktopDownloadTask[]>([])
   const [activeCategory, setActiveCategory] = useState('全部')
   const [searchTerm, setSearchTerm] = useState('')
   const deferredSearch = useDeferredValue(searchTerm.trim().toLowerCase())
   const [selectedResolution, setSelectedResolution] =
     useState<Resolution>(fallbackDesktopSettings.preferredResolution)
   const [selectedSeriesId, setSelectedSeriesId] = useState<string>(
-    mockCatalog[0].id,
+    initialSeries[0]?.id ?? '',
   )
   const [previewEpisode, setPreviewEpisode] = useState<Episode | null>(null)
   const [manualForm, setManualForm] = useState<ManualSourceForm>(defaultManualForm)
 
   const allSeries = useMemo(
-    () => [...manualSeries, ...mockCatalog],
-    [manualSeries],
+    () => getCatalogFromAdapters(manualSources),
+    [manualSources],
+  )
+
+  const categories = useMemo(
+    () => ['全部', ...new Set(allSeries.map((item) => item.category))],
+    [allSeries],
   )
 
   const filteredSeries = useMemo(() => {
@@ -132,8 +150,12 @@ function App() {
     filteredSeries[0] ??
     allSeries[0]
 
+  const visibleQueue = desktopContext.isElectron ? desktopDownloads : browserQueue
+  const adapterOptions = useMemo(() => getAdapterOptions(), [])
+
   useEffect(() => {
     let disposed = false
+    let unsubscribe = () => {}
 
     const bootstrapDesktop = async () => {
       if (!isDesktopShellAvailable() || !window.desktopApi) {
@@ -143,19 +165,27 @@ function App() {
         return
       }
 
-      const [context, settings] = await Promise.all([
+      const [context, settings, downloads] = await Promise.all([
         window.desktopApi.getContext(),
         window.desktopApi.getSettings(),
+        window.desktopApi.getDownloads(),
       ])
 
       if (disposed) {
         return
       }
 
+      unsubscribe = window.desktopApi.onDownloadsChanged((tasks) => {
+        startTransition(() => {
+          setDesktopDownloads(tasks)
+        })
+      })
+
       startTransition(() => {
         setDesktopContext(context)
         setDesktopSettings(settings)
         setSelectedResolution(settings.preferredResolution)
+        setDesktopDownloads(downloads)
         setDesktopReady(true)
       })
     }
@@ -164,22 +194,29 @@ function App() {
 
     return () => {
       disposed = true
+      unsubscribe()
     }
   }, [])
 
   useEffect(() => {
-    window.localStorage.setItem(queueStorageKey, JSON.stringify(queue))
-  }, [queue])
+    window.localStorage.setItem(manualStorageKey, JSON.stringify(manualSources))
+  }, [manualSources])
 
   useEffect(() => {
-    window.localStorage.setItem(manualStorageKey, JSON.stringify(manualSeries))
-  }, [manualSeries])
+    if (!desktopContext.isElectron) {
+      window.localStorage.setItem(queueStorageKey, JSON.stringify(browserQueue))
+    }
+  }, [browserQueue, desktopContext.isElectron])
 
   const maxConcurrentDownloads = Math.max(1, desktopSettings.maxConcurrentDownloads || 1)
 
   useEffect(() => {
+    if (desktopContext.isElectron) {
+      return
+    }
+
     const timer = window.setInterval(() => {
-      setQueue((current) => {
+      setBrowserQueue((current) => {
         const prepared = current.map((item) => ({ ...item }))
         let activeDownloads = prepared.filter((item) => item.status === '下载中').length
 
@@ -206,6 +243,8 @@ function App() {
           return {
             ...item,
             progress: nextProgress,
+            transferredBytes: Math.round((nextProgress / 100) * 1024 * 1024 * 8),
+            totalBytes: 1024 * 1024 * 8,
             status: nextProgress >= 100 ? '已完成' : '下载中',
           }
         })
@@ -213,21 +252,23 @@ function App() {
     }, 900)
 
     return () => window.clearInterval(timer)
-  }, [maxConcurrentDownloads])
+  }, [desktopContext.isElectron, maxConcurrentDownloads])
 
   const queueStats = useMemo(() => {
-    const completed = queue.filter((item) => item.status === '已完成').length
-    const downloading = queue.filter((item) => item.status === '下载中').length
-    const waiting = queue.filter((item) => item.status === '等待中').length
-    const paused = queue.filter((item) => item.status === '已暂停').length
+    const completed = visibleQueue.filter((item) => item.status === '已完成').length
+    const downloading = visibleQueue.filter((item) => item.status === '下载中').length
+    const waiting = visibleQueue.filter((item) => item.status === '等待中').length
+    const paused = visibleQueue.filter((item) => item.status === '已暂停').length
+    const failed = visibleQueue.filter((item) => item.status === '失败').length
     return {
       completed,
       downloading,
       waiting,
       paused,
-      total: queue.length,
+      failed,
+      total: visibleQueue.length,
     }
-  }, [queue])
+  }, [visibleQueue])
 
   const persistDesktopSettings = async (patch: Partial<DesktopSettings>) => {
     if (!window.desktopApi) {
@@ -289,60 +330,89 @@ function App() {
     }
   }
 
-  const appendEpisodes = (episodes: Episode[], sourceType: 'mock' | 'manual') => {
+  const enqueueEpisodes = async (episodes: Episode[]) => {
     if (!selectedSeries) {
       return
     }
 
-    setQueue((current) => {
-      const dedup = new Set(
-        current.map((item) => `${item.seriesId}:${item.episodeId}:${item.resolution}`),
-      )
-      const additions = episodes
-        .filter(
-          (episode) =>
-            !dedup.has(`${selectedSeries.id}:${episode.id}:${selectedResolution}`),
-        )
-        .map<QueueItem>((episode) => ({
-          id: `queue-${selectedSeries.id}-${episode.id}-${selectedResolution}`,
-          seriesId: selectedSeries.id,
-          seriesTitle: selectedSeries.title,
-          episodeId: episode.id,
-          episodeTitle: episode.title,
+    try {
+      const tasks = episodes.map((episode) =>
+        resolveEpisodeDownload({
+          series: selectedSeries,
+          episode,
           resolution: selectedResolution,
-          progress: 0,
-          status: '等待中',
-          sourceType,
-        }))
+          manualSources,
+        }),
+      )
 
-      return [...current, ...additions]
-    })
+      if (desktopContext.isElectron && window.desktopApi) {
+        await window.desktopApi.enqueueDownloads(tasks)
+      } else {
+        setBrowserQueue((current) => {
+          const dedup = new Set(current.map((item) => item.id))
+          const additions = tasks
+            .filter((task) => !dedup.has(task.taskId))
+            .map((task) => buildBrowserPreviewTask(selectedSeries, episodes.find((item) => item.id === task.episodeId) ?? episodes[0], task.resolution))
+
+          return [...current, ...additions]
+        })
+      }
+
+      setActionMessage(`已加入 ${tasks.length} 个下载任务。`)
+    } catch (error) {
+      setActionMessage(error instanceof Error ? error.message : '任务加入失败。')
+    }
   }
 
   const handleImport = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     if (!manualForm.title.trim()) {
+      setActionMessage('请先填写资源标题。')
       return
     }
 
     startTransition(() => {
-      const next = buildManualSeries(manualForm)
-      setManualSeries((current) => [next, ...current])
-      setSelectedSeriesId(next.id)
-      setActiveCategory('手动导入')
-      setSearchTerm(next.title)
+      const nextRecord: ManualSourceRecord = {
+        id: `manual-source-${Date.now()}`,
+        title: manualForm.title.trim(),
+        category: manualForm.category.trim() || '手动导入',
+        totalEpisodes: Number(manualForm.totalEpisodes),
+        urlTemplate: manualForm.urlTemplate.trim(),
+        note: manualForm.note.trim(),
+      }
+
+      setManualSources((current) => [nextRecord, ...current])
+      setSelectedSeriesId(`manual-${nextRecord.id}`)
+      setActiveCategory(nextRecord.category)
+      setSearchTerm(nextRecord.title)
       setManualForm(defaultManualForm)
+      setActionMessage(
+        '手动资源已保存。若填写了直链模板，就可以直接触发真实下载任务。',
+      )
     })
   }
 
-  const toggleQueueItem = (itemId: string) => {
-    setQueue((current) =>
+  const toggleQueueItem = async (task: DesktopDownloadTask) => {
+    if (desktopContext.isElectron && window.desktopApi) {
+      if (task.status === '已完成') {
+        return
+      }
+
+      if (task.status === '已暂停' || task.status === '失败') {
+        await window.desktopApi.resumeDownload(task.id)
+      } else {
+        await window.desktopApi.pauseDownload(task.id)
+      }
+      return
+    }
+
+    setBrowserQueue((current) =>
       current.map((item) => {
-        if (item.id !== itemId || item.status === '已完成') {
+        if (item.id !== task.id || item.status === '已完成') {
           return item
         }
 
-        if (item.status === '已暂停') {
+        if (item.status === '已暂停' || item.status === '失败') {
           return { ...item, status: '等待中' }
         }
 
@@ -351,8 +421,13 @@ function App() {
     )
   }
 
-  const clearCompleted = () => {
-    setQueue((current) => current.filter((item) => item.status !== '已完成'))
+  const clearCompleted = async () => {
+    if (desktopContext.isElectron && window.desktopApi) {
+      await window.desktopApi.clearCompletedDownloads()
+      return
+    }
+
+    setBrowserQueue((current) => current.filter((item) => item.status !== '已完成'))
   }
 
   return (
@@ -370,16 +445,16 @@ function App() {
             <span className="pill">
               {desktopReady ? `并发 ${maxConcurrentDownloads}` : '桌面配置同步中'}
             </span>
-            <span className="pill">仅支持演示数据 / 手动合法资源</span>
+            <span className="pill">仅支持授权直链 / 本地文件源</span>
           </div>
         </header>
 
         <section className="hero-panel">
           <div className="hero-copy">
-            <h2>前端工作台已经升级成桌面壳骨架</h2>
+            <h2>现在只差最后一层适配器实现就能替换下载源</h2>
             <p>
-              现在除了原来的资源库、任务队列和预览交互，已经接上了
-              Electron 主进程、原生目录选择、桌面配置文件持久化和打开下载目录。
+              主界面已经改成“资源展示层 + 下载执行层 + 源适配器层”的结构。
+              你后面更换源时，主要补的是适配器里的解析逻辑，不需要再改桌面壳和任务系统。
             </p>
           </div>
           <div className="hero-metrics">
@@ -392,11 +467,13 @@ function App() {
               <strong>{queueStats.total}</strong>
             </div>
             <div className="metric-card">
-              <span>已完成</span>
-              <strong>{queueStats.completed}</strong>
+              <span>失败 / 暂停</span>
+              <strong>{queueStats.failed + queueStats.paused}</strong>
             </div>
           </div>
         </section>
+
+        {actionMessage ? <div className="banner">{actionMessage}</div> : null}
 
         <section className="workspace">
           <aside className="sidebar">
@@ -432,11 +509,13 @@ function App() {
             </div>
 
             <div className="card tips">
-              <span className="section-label">桌面化方向</span>
+              <span className="section-label">可替换适配器</span>
               <ul>
-                <li>窗口和原生系统能力由 Electron 主进程接管。</li>
-                <li>下载目录、默认分辨率和并发数写入用户配置目录。</li>
-                <li>后续如果接合法下载引擎，可以直接复用当前 IPC 结构。</li>
+                {adapterOptions.map((adapter) => (
+                  <li key={adapter.id}>
+                    <strong>{adapter.name}</strong>：{adapter.description}
+                  </li>
+                ))}
               </ul>
             </div>
           </aside>
@@ -487,7 +566,7 @@ function App() {
                     <div className="series-meta">
                       <span>{series.category}</span>
                       <span>{series.totalEpisodes} 集</span>
-                      <span>{series.updatedAt}</span>
+                      <span>{series.adapterId}</span>
                     </div>
                   </div>
                 </button>
@@ -513,23 +592,16 @@ function App() {
                           {tag}
                         </span>
                       ))}
+                      <span className="tag">适配器 {selectedSeries.adapterId}</span>
                     </div>
                   </div>
                 </div>
 
                 <div className="detail-actions">
-                  <button
-                    className="primary"
-                    onClick={() =>
-                      appendEpisodes(
-                        selectedSeries.episodes,
-                        selectedSeries.status === '手动导入' ? 'manual' : 'mock',
-                      )
-                    }
-                  >
+                  <button className="primary" onClick={() => void enqueueEpisodes(selectedSeries.episodes)}>
                     全部加入队列
                   </button>
-                  <button className="secondary" onClick={clearCompleted}>
+                  <button className="secondary" onClick={() => void clearCompleted()}>
                     清空已完成
                   </button>
                 </div>
@@ -554,12 +626,7 @@ function App() {
                         </button>
                         <button
                           className="small"
-                          onClick={() =>
-                            appendEpisodes(
-                              [episode],
-                              selectedSeries.status === '手动导入' ? 'manual' : 'mock',
-                            )
-                          }
+                          onClick={() => void enqueueEpisodes([episode])}
                         >
                           下载
                         </button>
@@ -585,16 +652,17 @@ function App() {
                 <span>进行中 {queueStats.downloading}</span>
                 <span>等待中 {queueStats.waiting}</span>
                 <span>已暂停 {queueStats.paused}</span>
+                <span>失败 {queueStats.failed}</span>
               </div>
             </div>
 
             <div className="queue-list">
-              {queue.length === 0 ? (
+              {visibleQueue.length === 0 ? (
                 <div className="empty-state">
                   还没有任务，先从左侧资源库加入几集试试。
                 </div>
               ) : (
-                queue.map((item) => (
+                visibleQueue.map((item) => (
                   <article key={item.id} className="queue-row">
                     <div className="queue-head">
                       <div>
@@ -602,11 +670,11 @@ function App() {
                           {item.seriesTitle} · {item.episodeTitle}
                         </strong>
                         <p>
-                          {item.resolution} · {item.sourceType === 'mock' ? '演示源' : '手动源'}
+                          {item.resolution} · {item.adapterId} · {item.fileName}
                         </p>
                       </div>
-                      <button className="small ghost" onClick={() => toggleQueueItem(item.id)}>
-                        {item.status === '已暂停' ? '恢复' : '暂停'}
+                      <button className="small ghost" onClick={() => void toggleQueueItem(item)}>
+                        {item.status === '已暂停' || item.status === '失败' ? '恢复' : '暂停'}
                       </button>
                     </div>
                     <div className="progress-track">
@@ -616,9 +684,16 @@ function App() {
                       />
                     </div>
                     <div className="queue-foot">
-                      <span>{item.status}</span>
-                      <span>{item.progress}%</span>
+                      <span>
+                        {item.status}
+                        {item.errorMessage ? ` · ${item.errorMessage}` : ''}
+                      </span>
+                      <span>
+                        {item.progress}% · {formatBytes(item.transferredBytes)} /{' '}
+                        {formatBytes(item.totalBytes)}
+                      </span>
                     </div>
+                    {item.outputPath ? <div className="queue-path">{item.outputPath}</div> : null}
                   </article>
                 ))
               )}
@@ -692,7 +767,8 @@ function App() {
                   />
                 </label>
                 <p className="control-note">
-                  当前队列模拟器已经会按照这个并发数推进任务，后续可直接复用到真实下载执行层。
+                  下载执行层已支持真实直链文件下载，后续只要让适配器返回 `sourceUrl`
+                  和文件名即可接入。
                 </p>
               </section>
 
@@ -702,7 +778,7 @@ function App() {
                     <p className="eyebrow">资源适配</p>
                     <h3>手动导入合法资源</h3>
                   </div>
-                  <span className="pill">本地持久化</span>
+                  <span className="pill">模板令牌可替换</span>
                 </div>
 
                 <form className="import-form" onSubmit={handleImport}>
@@ -751,7 +827,7 @@ function App() {
                   </div>
 
                   <label className="field">
-                    <span>资源模板或说明</span>
+                    <span>URL 模板或本地文件模板</span>
                     <textarea
                       value={manualForm.urlTemplate}
                       onChange={(event) =>
@@ -760,9 +836,18 @@ function App() {
                           urlTemplate: event.target.value,
                         }))
                       }
-                      placeholder="填写你有权使用的 MP4/M3U8 直链模板，或先写备注占位。"
+                      placeholder="例如：https://example.com/drama/{episode}.mp4 或 D:\media\clip-{episode}.mp4"
                     />
                   </label>
+
+                  <div className="token-grid">
+                    <span className="token">{'{episode}'}</span>
+                    <span className="token">{'{episodeIndex}'}</span>
+                    <span className="token">{'{seriesId}'}</span>
+                    <span className="token">{'{seriesTitle}'}</span>
+                    <span className="token">{'{episodeTitle}'}</span>
+                    <span className="token">{'{resolution}'}</span>
+                  </div>
 
                   <label className="field">
                     <span>补充备注</span>

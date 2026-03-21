@@ -1,4 +1,9 @@
-import type { DesktopContext, DesktopSettings } from './desktop'
+import type {
+  DesktopContext,
+  DesktopDownloadTask,
+  DesktopSettings,
+  EnqueueDownloadInput,
+} from './desktop'
 
 type DesktopApi = {
   isElectron: boolean
@@ -9,6 +14,16 @@ type DesktopApi = {
   ) => Promise<DesktopSettings>
   chooseDownloadDirectory: () => Promise<string | null>
   openPath: (targetPath: string) => Promise<string>
+  getDownloads: () => Promise<DesktopDownloadTask[]>
+  enqueueDownloads: (
+    tasks: EnqueueDownloadInput[],
+  ) => Promise<DesktopDownloadTask[]>
+  pauseDownload: (taskId: string) => Promise<DesktopDownloadTask[]>
+  resumeDownload: (taskId: string) => Promise<DesktopDownloadTask[]>
+  clearCompletedDownloads: () => Promise<DesktopDownloadTask[]>
+  onDownloadsChanged: (
+    callback: (tasks: DesktopDownloadTask[]) => void,
+  ) => () => void
 }
 
 declare global {

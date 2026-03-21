@@ -14,6 +14,43 @@ export type DesktopSettings = {
   updatedAt: string
 }
 
+export type DesktopDownloadStatus =
+  | '等待中'
+  | '下载中'
+  | '已完成'
+  | '已暂停'
+  | '失败'
+
+export type EnqueueDownloadInput = {
+  taskId: string
+  adapterId: string
+  seriesId: string
+  seriesTitle: string
+  episodeId: string
+  episodeTitle: string
+  resolution: Resolution
+  sourceUrl: string
+  fileName: string
+}
+
+export type DesktopDownloadTask = {
+  id: string
+  adapterId: string
+  seriesId: string
+  seriesTitle: string
+  episodeId: string
+  episodeTitle: string
+  resolution: Resolution
+  sourceUrl: string
+  fileName: string
+  outputPath: string
+  progress: number
+  transferredBytes: number
+  totalBytes: number
+  status: DesktopDownloadStatus
+  errorMessage?: string
+}
+
 export const fallbackDesktopContext: DesktopContext = {
   isElectron: false,
   platform: 'web',

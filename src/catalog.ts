@@ -2,6 +2,8 @@ export type Resolution = '1080p' | '720p'
 
 export type Episode = {
   id: string
+  adapterId: string
+  sourceId: string
   index: number
   title: string
   duration: string
@@ -11,6 +13,8 @@ export type Episode = {
 
 export type Series = {
   id: string
+  adapterId: string
+  sourceId: string
   title: string
   category: string
   status: '免费样例' | '手动导入'
@@ -23,9 +27,15 @@ export type Series = {
   episodes: Episode[]
 }
 
-const createEpisodes = (count: number, prefix: string): Episode[] =>
+const createEpisodes = (
+  count: number,
+  adapterId: string,
+  prefix: string,
+): Episode[] =>
   Array.from({ length: count }, (_, index) => ({
     id: `${prefix}-${index + 1}`,
+    adapterId,
+    sourceId: `${prefix}:${index + 1}`,
     index: index + 1,
     title: `第${index + 1}集`,
     duration: `${1 + ((index * 7) % 3)}分${10 + ((index * 11) % 45)}秒`,
@@ -36,6 +46,8 @@ const createEpisodes = (count: number, prefix: string): Episode[] =>
 export const mockCatalog: Series[] = [
   {
     id: 'demo-urban-rise',
+    adapterId: 'demo-library',
+    sourceId: 'demo-urban-rise',
     title: '逆风翻盘计划',
     category: '高热短篇',
     status: '免费样例',
@@ -46,10 +58,12 @@ export const mockCatalog: Series[] = [
     updatedAt: '今天 09:30',
     posterGradient: 'linear-gradient(160deg, #ea580c 0%, #7c2d12 100%)',
     sourceNote: '仅用于界面联调，不代表任何第三方平台内容。',
-    episodes: createEpisodes(18, 'urban-rise'),
+    episodes: createEpisodes(18, 'demo-library', 'urban-rise'),
   },
   {
     id: 'demo-protector',
+    adapterId: 'demo-library',
+    sourceId: 'demo-protector',
     title: '她的守护时刻',
     category: '都市情感',
     status: '免费样例',
@@ -60,10 +74,12 @@ export const mockCatalog: Series[] = [
     updatedAt: '今天 12:15',
     posterGradient: 'linear-gradient(160deg, #db2777 0%, #4c1d95 100%)',
     sourceNote: '示例内容可替换为你合法持有的直链资源。',
-    episodes: createEpisodes(24, 'protector'),
+    episodes: createEpisodes(24, 'demo-library', 'protector'),
   },
   {
     id: 'demo-legend',
+    adapterId: 'demo-library',
+    sourceId: 'demo-legend',
     title: '长夜奇谭',
     category: '古风玄幻',
     status: '免费样例',
@@ -74,10 +90,12 @@ export const mockCatalog: Series[] = [
     updatedAt: '昨天 19:42',
     posterGradient: 'linear-gradient(160deg, #2563eb 0%, #1e293b 100%)',
     sourceNote: '框架模式只支持演示数据和手动导入源。',
-    episodes: createEpisodes(16, 'legend'),
+    episodes: createEpisodes(16, 'demo-library', 'legend'),
   },
   {
     id: 'demo-growth',
+    adapterId: 'demo-library',
+    sourceId: 'demo-growth',
     title: '微光里的答案',
     category: '成长励志',
     status: '免费样例',
@@ -88,6 +106,6 @@ export const mockCatalog: Series[] = [
     updatedAt: '昨天 08:05',
     posterGradient: 'linear-gradient(160deg, #059669 0%, #164e63 100%)',
     sourceNote: '这里预留了未来接入自有资源库的空间。',
-    episodes: createEpisodes(20, 'growth'),
+    episodes: createEpisodes(20, 'demo-library', 'growth'),
   },
 ]
