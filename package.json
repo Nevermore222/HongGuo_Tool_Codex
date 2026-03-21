@@ -1,11 +1,19 @@
 {
   "name": "hongguo-autotools",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "Desktop framework for legal short drama resource management workflows.",
+  "author": "Nevermore",
+  "main": "electron/main.cjs",
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:web": "vite",
+    "dev:electron": "wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .",
+    "dev:desktop": "concurrently -k \"npm:dev:web\" \"npm:dev:electron\"",
     "build": "tsc -b && vite build",
+    "build:desktop": "npm run build && electron-builder --dir",
+    "dist:win": "npm run build && electron-builder --win nsis",
     "lint": "eslint .",
     "preview": "vite preview"
   },
@@ -19,12 +27,39 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
+    "electron": "^41.0.3",
+    "electron-builder": "^26.8.1",
     "eslint": "^9.39.4",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.4.0",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.57.0",
-    "vite": "^8.0.1"
+    "vite": "^8.0.1",
+    "wait-on": "^9.0.4"
+  },
+  "build": {
+    "appId": "com.nevermore.hongguotoolcodex",
+    "productName": "HongGuo Tool Framework",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "signAndEditExecutable": false,
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   }
 }

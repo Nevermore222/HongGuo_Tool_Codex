@@ -1,7 +1,13 @@
 import { useDeferredValue, useEffect, useMemo, useState, startTransition } from 'react'
 import './App.css'
 import { mockCatalog } from './catalog'
+import {
+  fallbackDesktopContext,
+  fallbackDesktopSettings,
+  isDesktopShellAvailable,
+} from './desktop'
 import type { Episode, Resolution, Series } from './catalog'
+import type { DesktopContext, DesktopSettings } from './desktop'
 import type { FormEvent } from 'react'
 
 type QueueStatus = '等待中' | '下载中' | '已完成' | '已暂停'
@@ -75,7 +81,15 @@ const buildManualSeries = (form: ManualSourceForm): Series => ({
   })),
 })
 
+const formatUpdatedAt = (value: string) =>
+  value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '尚未同步'
+
 function App() {
+  const [desktopContext, setDesktopContext] =
+    useState<DesktopContext>(fallbackDesktopContext)
+  const [desktopSettings, setDesktopSettings] =
+    useState<DesktopSettings>(fallbackDesktopSettings)
+  const [desktopReady, setDesktopReady] = useState(false)
   const [manualSeries, setManualSeries] = useState<Series[]>(() =>
     readStorage(manualStorageKey, []),
   )
@@ -86,7 +100,7 @@ function App() {
   const [searchTerm, setSearchTerm] = useState('')
   const deferredSearch = useDeferredValue(searchTerm.trim().toLowerCase())
   const [selectedResolution, setSelectedResolution] =
-    useState<Resolution>('720p')
+    useState<Resolution>(fallbackDesktopSettings.preferredResolution)
   const [selectedSeriesId, setSelectedSeriesId] = useState<string>(
     mockCatalog[0].id,
   )
@@ -119,6 +133,41 @@ function App() {
     allSeries[0]
 
   useEffect(() => {
+    let disposed = false
+
+    const bootstrapDesktop = async () => {
+      if (!isDesktopShellAvailable() || !window.desktopApi) {
+        if (!disposed) {
+          setDesktopReady(true)
+        }
+        return
+      }
+
+      const [context, settings] = await Promise.all([
+        window.desktopApi.getContext(),
+        window.desktopApi.getSettings(),
+      ])
+
+      if (disposed) {
+        return
+      }
+
+      startTransition(() => {
+        setDesktopContext(context)
+        setDesktopSettings(settings)
+        setSelectedResolution(settings.preferredResolution)
+        setDesktopReady(true)
+      })
+    }
+
+    void bootstrapDesktop()
+
+    return () => {
+      disposed = true
+    }
+  }, [])
+
+  useEffect(() => {
     window.localStorage.setItem(queueStorageKey, JSON.stringify(queue))
   }, [queue])
 
@@ -126,27 +175,34 @@ function App() {
     window.localStorage.setItem(manualStorageKey, JSON.stringify(manualSeries))
   }, [manualSeries])
 
+  const maxConcurrentDownloads = Math.max(1, desktopSettings.maxConcurrentDownloads || 1)
+
   useEffect(() => {
     const timer = window.setInterval(() => {
       setQueue((current) => {
-        const downloadingItem = current.find((item) => item.status === '下载中')
-        if (!downloadingItem) {
-          const waitingIndex = current.findIndex((item) => item.status === '等待中')
-          if (waitingIndex === -1) {
-            return current
-          }
+        const prepared = current.map((item) => ({ ...item }))
+        let activeDownloads = prepared.filter((item) => item.status === '下载中').length
 
-          return current.map((item, index) =>
-            index === waitingIndex ? { ...item, status: '下载中', progress: 2 } : item,
-          )
+        if (activeDownloads < maxConcurrentDownloads) {
+          for (const item of prepared) {
+            if (activeDownloads >= maxConcurrentDownloads) {
+              break
+            }
+
+            if (item.status === '等待中') {
+              item.status = '下载中'
+              item.progress = item.progress === 0 ? 2 : item.progress
+              activeDownloads += 1
+            }
+          }
         }
 
-        return current.map((item) => {
-          if (item.id !== downloadingItem.id) {
+        return prepared.map((item) => {
+          if (item.status !== '下载中') {
             return item
           }
 
-          const nextProgress = Math.min(item.progress + 14, 100)
+          const nextProgress = Math.min(item.progress + 10, 100)
           return {
             ...item,
             progress: nextProgress,
@@ -157,19 +213,81 @@ function App() {
     }, 900)
 
     return () => window.clearInterval(timer)
-  }, [])
+  }, [maxConcurrentDownloads])
 
   const queueStats = useMemo(() => {
     const completed = queue.filter((item) => item.status === '已完成').length
     const downloading = queue.filter((item) => item.status === '下载中').length
     const waiting = queue.filter((item) => item.status === '等待中').length
+    const paused = queue.filter((item) => item.status === '已暂停').length
     return {
       completed,
       downloading,
       waiting,
+      paused,
       total: queue.length,
     }
   }, [queue])
+
+  const persistDesktopSettings = async (patch: Partial<DesktopSettings>) => {
+    if (!window.desktopApi) {
+      setDesktopSettings((current) => ({ ...current, ...patch }))
+      return
+    }
+
+    const next = await window.desktopApi.updateSettings(patch)
+    startTransition(() => {
+      setDesktopSettings(next)
+    })
+  }
+
+  const handleResolutionChange = async (resolution: Resolution) => {
+    setSelectedResolution(resolution)
+
+    if (desktopReady && isDesktopShellAvailable()) {
+      await persistDesktopSettings({ preferredResolution: resolution })
+    }
+  }
+
+  const chooseDownloadDirectory = async () => {
+    if (!window.desktopApi) {
+      return
+    }
+
+    const selectedPath = await window.desktopApi.chooseDownloadDirectory()
+    if (!selectedPath) {
+      return
+    }
+
+    startTransition(() => {
+      setDesktopSettings((current) => ({
+        ...current,
+        downloadDirectory: selectedPath,
+        updatedAt: new Date().toISOString(),
+      }))
+    })
+  }
+
+  const openDownloadDirectory = async () => {
+    if (!window.desktopApi || !desktopSettings.downloadDirectory) {
+      return
+    }
+
+    await window.desktopApi.openPath(desktopSettings.downloadDirectory)
+  }
+
+  const updateConcurrentDownloads = async (value: number) => {
+    const safeValue = Math.min(8, Math.max(1, value || 1))
+    setDesktopSettings((current) => ({
+      ...current,
+      maxConcurrentDownloads: safeValue,
+      updatedAt: new Date().toISOString(),
+    }))
+
+    if (desktopReady && isDesktopShellAvailable()) {
+      await persistDesktopSettings({ maxConcurrentDownloads: safeValue })
+    }
+  }
 
   const appendEpisodes = (episodes: Episode[], sourceType: 'mock' | 'manual') => {
     if (!selectedSeries) {
@@ -243,20 +361,25 @@ function App() {
         <header className="topbar">
           <div>
             <p className="eyebrow">HongGuo Tool Framework</p>
-            <h1>短剧资源下载框架</h1>
+            <h1>短剧资源下载桌面工具</h1>
           </div>
           <div className="topbar-actions">
-            <span className="pill pill-warn">未接入任何平台接口</span>
+            <span className={desktopContext.isElectron ? 'pill pill-good' : 'pill pill-warn'}>
+              {desktopContext.isElectron ? 'Electron 桌面模式' : '浏览器预览模式'}
+            </span>
+            <span className="pill">
+              {desktopReady ? `并发 ${maxConcurrentDownloads}` : '桌面配置同步中'}
+            </span>
             <span className="pill">仅支持演示数据 / 手动合法资源</span>
           </div>
         </header>
 
         <section className="hero-panel">
           <div className="hero-copy">
-            <h2>先把框架搭起来，再决定后续数据源</h2>
+            <h2>前端工作台已经升级成桌面壳骨架</h2>
             <p>
-              这个版本保留了你截图里最核心的桌面交互结构：
-              搜索、分类、分辨率、批量加入、任务队列、预览弹窗和本地保存。
+              现在除了原来的资源库、任务队列和预览交互，已经接上了
+              Electron 主进程、原生目录选择、桌面配置文件持久化和打开下载目录。
             </p>
           </div>
           <div className="hero-metrics">
@@ -309,11 +432,11 @@ function App() {
             </div>
 
             <div className="card tips">
-              <span className="section-label">框架说明</span>
+              <span className="section-label">桌面化方向</span>
               <ul>
-                <li>演示数据用于联调界面与任务状态，不包含第三方解析逻辑。</li>
-                <li>手动导入仅保存你自己填写的资源元信息，适合后续接自有源。</li>
-                <li>当前下载流程是本地模拟队列，便于后续替换成合法数据源适配器。</li>
+                <li>窗口和原生系统能力由 Electron 主进程接管。</li>
+                <li>下载目录、默认分辨率和并发数写入用户配置目录。</li>
+                <li>后续如果接合法下载引擎，可以直接复用当前 IPC 结构。</li>
               </ul>
             </div>
           </aside>
@@ -333,7 +456,7 @@ function App() {
                         ? 'resolution active'
                         : 'resolution'
                     }
-                    onClick={() => setSelectedResolution(resolution)}
+                    onClick={() => void handleResolutionChange(resolution)}
                   >
                     {resolution}
                   </button>
@@ -461,6 +584,7 @@ function App() {
               <div className="queue-stats">
                 <span>进行中 {queueStats.downloading}</span>
                 <span>等待中 {queueStats.waiting}</span>
+                <span>已暂停 {queueStats.paused}</span>
               </div>
             </div>
 
@@ -501,85 +625,163 @@ function App() {
             </div>
           </div>
 
-          <form className="import-panel card" onSubmit={handleImport}>
-            <div className="section-header">
-              <div>
-                <p className="eyebrow">资源适配</p>
-                <h3>手动导入合法资源</h3>
-              </div>
-              <span className="pill">本地持久化</span>
+          <div className="import-panel card">
+            <div className="panel-stack">
+              <section className="desktop-panel">
+                <div className="section-header">
+                  <div>
+                    <p className="eyebrow">桌面环境</p>
+                    <h3>Electron 工作区</h3>
+                  </div>
+                  <span className="pill">
+                    {desktopContext.platform} · v{desktopContext.version}
+                  </span>
+                </div>
+
+                <div className="info-grid">
+                  <article className="info-card">
+                    <span>运行模式</span>
+                    <strong>{desktopContext.isElectron ? '桌面应用' : '浏览器预览'}</strong>
+                  </article>
+                  <article className="info-card">
+                    <span>下载目录</span>
+                    <strong>{desktopSettings.downloadDirectory}</strong>
+                  </article>
+                  <article className="info-card">
+                    <span>配置文件更新时间</span>
+                    <strong>{formatUpdatedAt(desktopSettings.updatedAt)}</strong>
+                  </article>
+                </div>
+
+                <div className="field">
+                  <span>用户配置目录</span>
+                  <div className="path-box">{desktopContext.userDataPath}</div>
+                </div>
+
+                <div className="field">
+                  <span>下载目录</span>
+                  <div className="path-box">{desktopSettings.downloadDirectory}</div>
+                  <div className="button-row">
+                    <button
+                      className="small"
+                      onClick={() => void chooseDownloadDirectory()}
+                      disabled={!desktopContext.isElectron}
+                    >
+                      选择目录
+                    </button>
+                    <button
+                      className="small ghost"
+                      onClick={() => void openDownloadDirectory()}
+                      disabled={!desktopContext.isElectron}
+                    >
+                      打开目录
+                    </button>
+                  </div>
+                </div>
+
+                <label className="field">
+                  <span>最大并发下载数</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={8}
+                    value={desktopSettings.maxConcurrentDownloads}
+                    onChange={(event) =>
+                      void updateConcurrentDownloads(Number(event.target.value))
+                    }
+                  />
+                </label>
+                <p className="control-note">
+                  当前队列模拟器已经会按照这个并发数推进任务，后续可直接复用到真实下载执行层。
+                </p>
+              </section>
+
+              <section>
+                <div className="section-header">
+                  <div>
+                    <p className="eyebrow">资源适配</p>
+                    <h3>手动导入合法资源</h3>
+                  </div>
+                  <span className="pill">本地持久化</span>
+                </div>
+
+                <form className="import-form" onSubmit={handleImport}>
+                  <label className="field">
+                    <span>资源标题</span>
+                    <input
+                      value={manualForm.title}
+                      onChange={(event) =>
+                        setManualForm((current) => ({
+                          ...current,
+                          title: event.target.value,
+                        }))
+                      }
+                      placeholder="例如：自有样片合集"
+                    />
+                  </label>
+
+                  <div className="split">
+                    <label className="field">
+                      <span>分类</span>
+                      <input
+                        value={manualForm.category}
+                        onChange={(event) =>
+                          setManualForm((current) => ({
+                            ...current,
+                            category: event.target.value,
+                          }))
+                        }
+                      />
+                    </label>
+                    <label className="field">
+                      <span>总集数</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={200}
+                        value={manualForm.totalEpisodes}
+                        onChange={(event) =>
+                          setManualForm((current) => ({
+                            ...current,
+                            totalEpisodes: Number(event.target.value),
+                          }))
+                        }
+                      />
+                    </label>
+                  </div>
+
+                  <label className="field">
+                    <span>资源模板或说明</span>
+                    <textarea
+                      value={manualForm.urlTemplate}
+                      onChange={(event) =>
+                        setManualForm((current) => ({
+                          ...current,
+                          urlTemplate: event.target.value,
+                        }))
+                      }
+                      placeholder="填写你有权使用的 MP4/M3U8 直链模板，或先写备注占位。"
+                    />
+                  </label>
+
+                  <label className="field">
+                    <span>补充备注</span>
+                    <textarea
+                      value={manualForm.note}
+                      onChange={(event) =>
+                        setManualForm((current) => ({ ...current, note: event.target.value }))
+                      }
+                      placeholder="例如：仅团队内部测试使用。"
+                    />
+                  </label>
+
+                  <button className="primary submit" type="submit">
+                    保存到资源库
+                  </button>
+                </form>
+              </section>
             </div>
-
-            <label className="field">
-              <span>资源标题</span>
-              <input
-                value={manualForm.title}
-                onChange={(event) =>
-                  setManualForm((current) => ({ ...current, title: event.target.value }))
-                }
-                placeholder="例如：自有样片合集"
-              />
-            </label>
-
-            <div className="split">
-              <label className="field">
-                <span>分类</span>
-                <input
-                  value={manualForm.category}
-                  onChange={(event) =>
-                    setManualForm((current) => ({
-                      ...current,
-                      category: event.target.value,
-                    }))
-                  }
-                />
-              </label>
-              <label className="field">
-                <span>总集数</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={200}
-                  value={manualForm.totalEpisodes}
-                  onChange={(event) =>
-                    setManualForm((current) => ({
-                      ...current,
-                      totalEpisodes: Number(event.target.value),
-                    }))
-                  }
-                />
-              </label>
-            </div>
-
-            <label className="field">
-              <span>资源模板或说明</span>
-              <textarea
-                value={manualForm.urlTemplate}
-                onChange={(event) =>
-                  setManualForm((current) => ({
-                    ...current,
-                    urlTemplate: event.target.value,
-                  }))
-                }
-                placeholder="填写你有权使用的 MP4/M3U8 直链模板，或先写备注占位。"
-              />
-            </label>
-
-            <label className="field">
-              <span>补充备注</span>
-              <textarea
-                value={manualForm.note}
-                onChange={(event) =>
-                  setManualForm((current) => ({ ...current, note: event.target.value }))
-                }
-                placeholder="例如：仅团队内部测试使用。"
-              />
-            </label>
-
-            <button className="primary submit" type="submit">
-              保存到资源库
-            </button>
-          </form>
+          </div>
         </section>
       </div>
 
