@@ -121,6 +121,11 @@
   gap: 18px;
 }
 
+.queue-tools {
+  display: grid;
+  gap: 12px;
+}
+
 .card,
 .detail-panel,
 .catalog-panel {
@@ -173,6 +178,12 @@
   gap: 12px;
 }
 
+.filter-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .category {
   width: 100%;
   text-align: left;
@@ -181,6 +192,20 @@
   border: 1px solid transparent;
   background: rgba(30, 41, 59, 0.7);
   color: var(--text);
+}
+
+.filter-chip {
+  padding: 9px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(30, 41, 59, 0.7);
+  color: var(--text);
+}
+
+.filter-chip.active {
+  border-color: rgba(96, 165, 250, 0.3);
+  background: linear-gradient(135deg, rgba(29, 78, 216, 0.95) 0%, rgba(12, 74, 110, 0.95) 100%);
+  color: #eff6ff;
 }
 
 .category.active,
@@ -376,6 +401,10 @@ button:disabled {
 
 .queue-actions {
   margin-top: 10px;
+}
+
+.queue-search {
+  margin: 0;
 }
 
 .path-box {

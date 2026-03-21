@@ -46,6 +46,8 @@ const defaultManualForm: ManualSourceForm = {
   note: '',
 }
 
+const queueStatusOptions = ['全部', '等待中', '下载中', '已完成', '已暂停', '失败'] as const
+
 const buildManifestFileName = () => {
   const stamp = new Date().toISOString().replaceAll(':', '-').replace(/\.\d+Z$/, 'Z')
   return `manual-sources-${stamp}.json`
@@ -167,6 +169,10 @@ function App() {
   const [activeCategory, setActiveCategory] = useState('全部')
   const [searchTerm, setSearchTerm] = useState('')
   const deferredSearch = useDeferredValue(searchTerm.trim().toLowerCase())
+  const [queueSearchTerm, setQueueSearchTerm] = useState('')
+  const deferredQueueSearch = useDeferredValue(queueSearchTerm.trim().toLowerCase())
+  const [queueStatusFilter, setQueueStatusFilter] =
+    useState<(typeof queueStatusOptions)[number]>('全部')
   const [selectedResolution, setSelectedResolution] =
     useState<Resolution>(fallbackDesktopSettings.preferredResolution)
   const [selectedSeriesId, setSelectedSeriesId] = useState<string>(
@@ -207,6 +213,29 @@ function App() {
 
   const visibleQueue = desktopContext.isElectron ? desktopDownloads : browserQueue
   const adapterOptions = useMemo(() => getAdapterOptions(), [])
+
+  const filteredQueue = useMemo(() => {
+    return visibleQueue.filter((item) => {
+      const matchesStatus =
+        queueStatusFilter === '全部' || item.status === queueStatusFilter
+      const searchBucket = [
+        item.seriesTitle,
+        item.episodeTitle,
+        item.fileName,
+        item.adapterId,
+        item.errorMessage ?? '',
+        item.outputPath,
+      ]
+        .join(' ')
+        .toLowerCase()
+
+      const matchesSearch =
+        deferredQueueSearch.length === 0 ||
+        searchBucket.includes(deferredQueueSearch)
+
+      return matchesStatus && matchesSearch
+    })
+  }, [deferredQueueSearch, queueStatusFilter, visibleQueue])
 
   useEffect(() => {
     let disposed = false
@@ -827,13 +856,42 @@ function App() {
               </button>
             </div>
 
+            <div className="queue-tools">
+              <input
+                className="search-input queue-search"
+                value={queueSearchTerm}
+                onChange={(event) => setQueueSearchTerm(event.target.value)}
+                placeholder="搜索任务标题、文件名、适配器或错误信息"
+              />
+              <div className="filter-row">
+                {queueStatusOptions.map((status) => (
+                  <button
+                    key={status}
+                    className={
+                      status === queueStatusFilter ? 'filter-chip active' : 'filter-chip'
+                    }
+                    onClick={() => setQueueStatusFilter(status)}
+                  >
+                    {status}
+                  </button>
+                ))}
+              </div>
+              <div className="section-meta">
+                当前显示 {filteredQueue.length} / {visibleQueue.length} 条任务
+              </div>
+            </div>
+
             <div className="queue-list">
               {visibleQueue.length === 0 ? (
                 <div className="empty-state">
                   还没有任务，先从左侧资源库加入几集试试。
                 </div>
+              ) : filteredQueue.length === 0 ? (
+                <div className="empty-state">
+                  没有匹配的任务，试试清空搜索词或切换状态筛选。
+                </div>
               ) : (
-                visibleQueue.map((item) => (
+                filteredQueue.map((item) => (
                   <article key={item.id} className="queue-row">
                     <div className="queue-head">
                       <div>
