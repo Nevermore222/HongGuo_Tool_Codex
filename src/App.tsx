@@ -106,6 +106,8 @@ const formatUpdatedAt = (value: string) =>
 const formatLogTime = (value: string) =>
   new Date(value).toLocaleString('zh-CN', { hour12: false })
 
+const formatPercent = (value: number) => `${value.toFixed(value >= 10 ? 0 : 1)}%`
+
 const formatBytes = (bytes: number) => {
   if (!bytes) {
     return '0 B'
@@ -414,6 +416,117 @@ function App() {
     }
   }, [desktopLogs])
 
+  const dashboardStats = useMemo(() => {
+    const settled = queueStats.completed + queueStats.failed
+    const successRate = settled > 0 ? (queueStats.completed / settled) * 100 : 0
+    const active = queueStats.downloading + queueStats.waiting + queueStats.paused
+    const failedAdapters = new Set(
+      visibleQueue
+        .filter((item) => item.status === '失败')
+        .map((item) => item.adapterId),
+    ).size
+
+    return {
+      successRate,
+      active,
+      failedAdapters,
+      distinctFailureReasons: new Set(
+        visibleQueue
+          .filter((item) => item.status === '失败' && item.errorMessage)
+          .map((item) => item.errorMessage),
+      ).size,
+    }
+  }, [queueStats, visibleQueue])
+
+  const adapterStats = useMemo(() => {
+    const grouped = new Map<
+      string,
+      {
+        adapterId: string
+        total: number
+        completed: number
+        failed: number
+        active: number
+      }
+    >()
+
+    for (const task of visibleQueue) {
+      const current =
+        grouped.get(task.adapterId) ??
+        {
+          adapterId: task.adapterId,
+          total: 0,
+          completed: 0,
+          failed: 0,
+          active: 0,
+        }
+
+      current.total += 1
+      if (task.status === '已完成') {
+        current.completed += 1
+      }
+      if (task.status === '失败') {
+        current.failed += 1
+      }
+      if (task.status === '下载中' || task.status === '等待中' || task.status === '已暂停') {
+        current.active += 1
+      }
+
+      grouped.set(task.adapterId, current)
+    }
+
+    return [...grouped.values()].sort((left, right) => {
+      if (right.failed !== left.failed) {
+        return right.failed - left.failed
+      }
+
+      if (right.active !== left.active) {
+        return right.active - left.active
+      }
+
+      return right.total - left.total
+    })
+  }, [visibleQueue])
+
+  const failureReasonStats = useMemo(() => {
+    const grouped = new Map<
+      string,
+      {
+        message: string
+        count: number
+        adapterIds: Set<string>
+      }
+    >()
+
+    for (const task of visibleQueue) {
+      if (task.status !== '失败') {
+        continue
+      }
+
+      const message = task.errorMessage?.trim() || '未记录错误详情'
+      const current =
+        grouped.get(message) ??
+        {
+          message,
+          count: 0,
+          adapterIds: new Set<string>(),
+        }
+
+      current.count += 1
+      current.adapterIds.add(task.adapterId)
+      grouped.set(message, current)
+    }
+
+    return [...grouped.values()]
+      .map((item) => ({
+        message: item.message,
+        count: item.count,
+        adapters: [...item.adapterIds].sort(),
+      }))
+      .sort((left, right) => right.count - left.count)
+      .slice(0, 6)
+  }, [visibleQueue])
+
   const persistDesktopSettings = async (patch: Partial<DesktopSettings>) => {
     if (!window.desktopApi) {
       setDesktopSettings((current) => ({ ...current, ...patch }))
@@ -698,6 +811,18 @@ function App() {
 
     await window.desktopApi.clearDownloadLogs()
     setActionMessage('下载日志已清空。')
+  }
+
+  const inspectAdapterTasks = (adapterId: string) => {
+    setQueueSearchTerm(adapterId)
+    setQueueStatusFilter('全部')
+    setActionMessage(`已将任务队列筛选到适配器 ${adapterId}。`)
+  }
+
+  const inspectFailureReason = (message: string) => {
+    setQueueSearchTerm(message)
+    setQueueStatusFilter('失败')
+    setActionMessage('已切换到失败任务视图，并按错误信息筛选。')
   }
 
   const openDownloadFile = async (taskId: string) => {
@@ -1119,6 +1244,99 @@ function App() {
                   下载执行层现在支持暂停后按已下载字节继续。后续只要让适配器返回
                   `sourceUrl` 和文件名即可接入。
                 </p>
+              </section>
+
+              <section>
+                <div className="section-header">
+                  <div>
+                    <p className="eyebrow">统计面板</p>
+                    <h3>下载健康度</h3>
+                  </div>
+                  <span className="pill">基于当前任务队列实时计算</span>
+                </div>
+
+                <div className="info-grid">
+                  <article className="info-card">
+                    <span>完成成功率</span>
+                    <strong>{formatPercent(dashboardStats.successRate)}</strong>
+                  </article>
+                  <article className="info-card">
+                    <span>活跃任务</span>
+                    <strong>{dashboardStats.active}</strong>
+                  </article>
+                  <article className="info-card">
+                    <span>失败适配器数</span>
+                    <strong>{dashboardStats.failedAdapters}</strong>
+                  </article>
+                  <article className="info-card">
+                    <span>失败原因数</span>
+                    <strong>{dashboardStats.distinctFailureReasons}</strong>
+                  </article>
+                </div>
+
+                <div className="stats-grid">
+                  <div className="stats-card">
+                    <div className="section-header compact">
+                      <div>
+                        <span className="section-label">适配器表现</span>
+                      </div>
+                      <span className="section-meta">按失败数优先排序</span>
+                    </div>
+                    <div className="stats-list">
+                      {adapterStats.length === 0 ? (
+                        <div className="empty-state">还没有任务，适配器统计会在加入队列后出现。</div>
+                      ) : (
+                        adapterStats.map((item) => (
+                          <article key={item.adapterId} className="stats-row">
+                            <div>
+                              <strong>{item.adapterId}</strong>
+                              <p>
+                                共 {item.total} 条 · 完成 {item.completed} · 失败 {item.failed} · 活跃 {item.active}
+                              </p>
+                            </div>
+                            <button
+                              className="small ghost"
+                              onClick={() => inspectAdapterTasks(item.adapterId)}
+                            >
+                              查看任务
+                            </button>
+                          </article>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="stats-card">
+                    <div className="section-header compact">
+                      <div>
+                        <span className="section-label">高频失败原因</span>
+                      </div>
+                      <span className="section-meta">取当前失败任务前 6 项</span>
+                    </div>
+                    <div className="stats-list">
+                      {failureReasonStats.length === 0 ? (
+                        <div className="empty-state">当前没有失败任务，失败原因统计为空。</div>
+                      ) : (
+                        failureReasonStats.map((item) => (
+                          <article key={item.message} className="stats-row">
+                            <div>
+                              <strong>{item.message}</strong>
+                              <p>
+                                {item.count} 条失败 · 适配器 {item.adapters.join('、')}
+                              </p>
+                            </div>
+                            <button
+                              className="small ghost"
+                              onClick={() => inspectFailureReason(item.message)}
+                            >
+                              查看失败项
+                            </button>
+                          </article>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </div>
               </section>
 
               <section>
