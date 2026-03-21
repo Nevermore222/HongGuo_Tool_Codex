@@ -121,7 +121,13 @@ flowchart LR
   主界面、任务交互、导入导出入口。
 
 - [src/sourceAdapters.ts](/D:/HongGuo_AutoTools/src/sourceAdapters.ts)
-  适配器契约、内置适配器、资源列表生成逻辑。
+  兼容入口，对外统一导出适配器能力。
+
+- [src/adapters/registry.ts](/D:/HongGuo_AutoTools/src/adapters/registry.ts)
+  适配器注册中心，统一聚合内置适配器和自定义适配器。
+
+- [src/adapters/custom/index.ts](/D:/HongGuo_AutoTools/src/adapters/custom/index.ts)
+  自定义适配器注册入口，后续业务扩展优先改这里。
 
 - [src/manualSources.ts](/D:/HongGuo_AutoTools/src/manualSources.ts)
   手动资源清单的导入、导出、解析、合并。
@@ -184,6 +190,7 @@ flowchart LR
 - 模板：[custom-direct-file.adapter.template.ts](/D:/HongGuo_AutoTools/adapter-templates/custom-direct-file.adapter.template.ts)
 - 示例：[team-library.adapter.example.ts](/D:/HongGuo_AutoTools/adapter-examples/team-library.adapter.example.ts)
 - 文档：[adapter-development.md](/D:/HongGuo_AutoTools/docs/adapter-development.md)
+- 自定义注册入口：[index.ts](/D:/HongGuo_AutoTools/src/adapters/custom/index.ts)
 
 ## 手动资源模板
 
@@ -267,11 +274,11 @@ Electron 模式下，配置保存在用户数据目录：
 
 如果你要继续完善，优先顺序建议是：
 
-1. 把自定义适配器拆到独立目录并支持统一注册
-2. 增加“资源发现层”，支持从本地 JSON / 内部 API 导入资源库
-3. 给下载任务增加持久化和重启恢复
-4. 补充下载日志、失败统计和导出报表
-5. 如果你的合法源需要新格式，再补新的下载执行器
+1. 增加“资源发现层”，支持从本地 JSON / 内部 API 导入资源库
+2. 给下载任务增加持久化和重启恢复
+3. 补充下载日志、失败统计和导出报表
+4. 如果你的合法源需要新格式，再补新的下载执行器
+5. 进一步做适配器运行时配置化
 
 ## 常见开发路径
 
@@ -281,7 +288,8 @@ Electron 模式下，配置保存在用户数据目录：
 
 1. 复制模板文件
 2. 实现 `resolveEpisodeDownload`
-3. 注册到 [src/sourceAdapters.ts](/D:/HongGuo_AutoTools/src/sourceAdapters.ts)
+3. 把适配器文件放到 `src/adapters/custom/`
+4. 注册到 [index.ts](/D:/HongGuo_AutoTools/src/adapters/custom/index.ts)
 
 ### 批量迁移资源定义
 
