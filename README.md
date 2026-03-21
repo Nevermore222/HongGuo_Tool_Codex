@@ -2,57 +2,192 @@
 
 一个面向桌面工具方向演进的短剧资源管理框架，当前技术栈为 `React + Vite + TypeScript + Electron`。
 
-这个项目当前提供的是通用桌面工作台、真实直链下载执行层和可替换的数据源适配器骨架，不包含任何第三方平台接口、内容解析或平台内容下载能力。它适合继续接入你自有的、已获授权的 `MP4` / 本地文件资源源。
+这个项目的目标不是做某个平台的专用下载器，而是提供一套可复用的“桌面壳 + 任务队列 + 下载执行层 + 数据源适配器”骨架，方便你接入自己合法持有的直链、本地文件、对象存储或内部资源库。
+
+## 项目定位
+
+- 提供桌面化资源管理工作台
+- 提供真实文件下载执行层
+- 提供可替换的数据源适配器层
+- 提供手动资源清单导入导出能力
+- 保持和具体平台解耦，方便后续换源
 
 ## 当前能力
 
 - Electron 桌面窗口与预加载桥接
-- 资源搜索与分类浏览
-- 剧集详情与分辨率切换
+- 资源搜索、分类浏览、分辨率切换
 - 单集加入队列 / 全部加入队列
 - 真实下载执行层
-- 直链 HTTP/HTTPS 文件下载
+- HTTP/HTTPS 直链文件下载
 - 本地文件复制式下载
 - 暂停 / 恢复 / 失败重试 / 并发控制
 - 原生下载目录选择与打开目录
 - 用户配置写入 Electron `userData` 目录
-- 手动导入合法资源模板
+- 手动资源模板录入
+- 手动资源清单 JSON 导入 / 导出
 - 浏览器模式下的队列模拟预览
 
-## 设计边界
+## 合规边界
 
 - 不接入红果短剧或任何第三方视频平台
-- 不实现平台资源抓取、批量解析、绕过限制或批量下载
-- 当前真实下载层只处理直接文件资源，不处理流媒体分片解析
+- 不实现平台资源抓取、批量解析、绕过限制或未授权下载
+- 当前真实下载层只处理“直接文件资源”，不处理流媒体分片解析
+- 适配器层应只返回你有权使用的直链或本地文件路径
+
+## 快速开始
+
+### 1. 安装依赖
+
+```bash
+npm install
+```
+
+### 2. 启动桌面开发模式
+
+```bash
+npm run dev:desktop
+```
+
+这会同时启动：
+
+- Vite 前端开发服务
+- Electron 桌面窗口
+
+### 3. 浏览器预览
+
+```bash
+npm run dev
+```
+
+浏览器模式主要用于界面调试和队列预览，不包含 Electron 原生文件对话框。
+
+## 常用脚本
+
+```bash
+npm run dev
+npm run dev:desktop
+npm run build
+npm run lint
+npm run build:desktop
+npm run dist:win
+```
+
+说明：
+
+- `dev`: 只启动 Vite
+- `dev:desktop`: 启动 Vite + Electron
+- `build`: 构建前端产物
+- `lint`: 执行 ESLint
+- `build:desktop`: 生成桌面目录包
+- `dist:win`: 生成 Windows 安装包
+
+## 系统结构
+
+```mermaid
+flowchart LR
+  UI["React UI"] --> Adapter["Source Adapter Layer"]
+  Adapter --> Queue["Electron Download Queue"]
+  Queue --> FileIO["HTTP / Local File Executor"]
+  Queue --> Settings["Desktop Settings"]
+  UI --> Manifest["Manual Source Manifest"]
+```
+
+### 分层说明
+
+1. `React UI`
+   负责资源展示、任务操作、表单录入、导入导出。
+
+2. `Source Adapter Layer`
+   把资源条目和剧集信息转换成统一的下载任务描述。
+
+3. `Electron Download Queue`
+   负责并发控制、状态切换、暂停恢复、任务广播。
+
+4. `HTTP / Local File Executor`
+   负责真正的文件传输。
+
+5. `Desktop Settings`
+   负责保存下载目录、默认清晰度、最大并发数。
+
+## 关键目录
+
+- [electron/main.cjs](/D:/HongGuo_AutoTools/electron/main.cjs)
+  Electron 主进程、下载调度、文件保存、IPC。
+
+- [electron/preload.cjs](/D:/HongGuo_AutoTools/electron/preload.cjs)
+  安全桥接层，把桌面能力暴露给前端。
+
+- [src/App.tsx](/D:/HongGuo_AutoTools/src/App.tsx)
+  主界面、任务交互、导入导出入口。
+
+- [src/sourceAdapters.ts](/D:/HongGuo_AutoTools/src/sourceAdapters.ts)
+  适配器契约、内置适配器、资源列表生成逻辑。
+
+- [src/manualSources.ts](/D:/HongGuo_AutoTools/src/manualSources.ts)
+  手动资源清单的导入、导出、解析、合并。
+
+- [src/desktop.ts](/D:/HongGuo_AutoTools/src/desktop.ts)
+  桌面上下文、任务类型、IPC 类型。
+
+- [adapter-templates/custom-direct-file.adapter.template.ts](/D:/HongGuo_AutoTools/adapter-templates/custom-direct-file.adapter.template.ts)
+  自定义适配器模板。
+
+- [adapter-examples/team-library.adapter.example.ts](/D:/HongGuo_AutoTools/adapter-examples/team-library.adapter.example.ts)
+  自定义适配器示例。
+
+- [docs/adapter-development.md](/D:/HongGuo_AutoTools/docs/adapter-development.md)
+  适配器开发说明。
+
+## 下载任务执行链路
+
+1. UI 选中剧集并点击下载
+2. `resolveEpisodeDownload()` 根据 `adapterId` 找到适配器
+3. 适配器返回统一下载描述：
+   `taskId / sourceUrl / fileName / resolution`
+4. Electron 主进程将任务加入队列
+5. 调度器根据最大并发数启动任务
+6. 执行器根据 `sourceUrl` 选择：
+   HTTP/HTTPS 下载
+   或本地文件复制
+7. 进度通过 IPC 推回前端界面
 
 ## 适配器架构
 
-当前的关键扩展点在 [src/sourceAdapters.ts](D:/HongGuo_AutoTools/src/sourceAdapters.ts)。
-
 现有内置适配器：
 
-- `demo-library`: 返回公开演示视频直链，用于验证整个下载链路
-- `manual-template`: 把手动录入的模板解析成最终下载地址，是后续换源时最接近业务的一层
+- `demo-library`
+  返回公开演示视频直链，用于验证完整链路。
 
-开发参考文件：
+- `manual-template`
+  把手动录入的 URL 模板解析成最终下载地址，是后续换源时最常改的一层。
+
+适配器最小职责只有一个：
+
+- 把“业务资源信息”转换成“可执行下载任务”
+
+适配器最终必须返回：
+
+- `taskId`
+- `adapterId`
+- `seriesId`
+- `seriesTitle`
+- `episodeId`
+- `episodeTitle`
+- `resolution`
+- `sourceUrl`
+- `fileName`
+
+也就是说，下载执行层不关心资源来自哪里，只关心你是否给出了合法直链或本地文件路径。
+
+### 开发入口
 
 - 模板：[custom-direct-file.adapter.template.ts](/D:/HongGuo_AutoTools/adapter-templates/custom-direct-file.adapter.template.ts)
 - 示例：[team-library.adapter.example.ts](/D:/HongGuo_AutoTools/adapter-examples/team-library.adapter.example.ts)
 - 文档：[adapter-development.md](/D:/HongGuo_AutoTools/docs/adapter-development.md)
 
-统一适配输出为：
+## 手动资源模板
 
-- `taskId`
-- `seriesId` / `episodeId`
-- `resolution`
-- `sourceUrl`
-- `fileName`
-
-也就是说，桌面下载执行层并不关心资源来自哪里，只关心适配器最终是否返回一个合法直链或本地文件路径。
-
-## 模板令牌
-
-手动模板当前支持：
+手动资源支持以下令牌：
 
 - `{episode}`
 - `{episodeIndex}`
@@ -71,57 +206,107 @@ https://example.com/drama/{episode}.mp4
 D:\media\series-{episodeIndex}.mp4
 ```
 
-## 本地开发
+这些模板最终由 `manual-template` 适配器解析成真实下载地址。
 
-```bash
-npm install
-npm run dev:desktop
+## 手动资源清单
+
+项目现在支持把手动资源导入 / 导出为 JSON，方便：
+
+- 备份资源配置
+- 在不同机器间迁移
+- 团队内部共享资源定义
+- 批量替换资源源
+
+典型结构如下：
+
+```json
+{
+  "version": 1,
+  "exportedAt": "2026-03-22T12:00:00.000Z",
+  "sources": [
+    {
+      "id": "manual-source-001",
+      "title": "示例资源",
+      "category": "手动导入",
+      "totalEpisodes": 12,
+      "urlTemplate": "https://example.com/demo/{episode}.mp4",
+      "note": "团队内部测试"
+    }
+  ]
+}
 ```
 
-这会同时启动 Vite 开发服务和 Electron 桌面窗口。
+导入规则：
 
-## 浏览器预览
+- 默认按 `id` 合并
+- 相同 `id` 会覆盖旧记录
+- 格式不合法会直接报错
 
-```bash
-npm run dev
-```
+## 配置存储
 
-## 构建
+Electron 模式下，配置保存在用户数据目录：
 
-```bash
-npm run build
-npm run lint
-```
+- 下载目录
+- 最大并发数
+- 默认分辨率
 
-## 桌面打包
+前端还会在本地保存：
 
-```bash
-npm run build:desktop
-```
+- 手动资源列表
+- 浏览器模式下的模拟任务队列
 
-生成无安装的桌面构建目录。
+## 当前已知限制
 
-```bash
-npm run dist:win
-```
+- 真实下载层目前只支持单文件直链或本地文件
+- 不支持分片流媒体下载
+- 不支持下载任务跨重启持久恢复
+- 适配器仍然是代码注册，不是运行时热插拔
+- 当前没有自动更新机制
 
-生成 Windows 安装包。
+## 推荐的下一步演进
 
-## 代码结构
+如果你要继续完善，优先顺序建议是：
 
-- `electron/main.cjs`: Electron 主进程、下载调度、文件保存、IPC
-- `electron/preload.cjs`: 安全的预加载桥，向前端暴露桌面 API
-- `src/App.tsx`: 主界面、下载任务交互、桌面配置
-- `src/sourceAdapters.ts`: 适配器契约、内置适配器、手动模板解析
-- `src/desktop.ts`: 桌面上下文、下载任务和 IPC 类型
-- `src/catalog.ts`: 演示资源数据与类型定义
+1. 把自定义适配器拆到独立目录并支持统一注册
+2. 增加“资源发现层”，支持从本地 JSON / 内部 API 导入资源库
+3. 给下载任务增加持久化和重启恢复
+4. 补充下载日志、失败统计和导出报表
+5. 如果你的合法源需要新格式，再补新的下载执行器
 
-## 后续只需要补的地方
+## 常见开发路径
 
-如果你要替换下载源，优先改这里：
+### 只换下载源
 
-1. 在 `src/sourceAdapters.ts` 增加新的适配器定义
-2. 让适配器把你的业务数据转换成 `sourceUrl` 和 `fileName`
-3. 如果有新的资源发现逻辑，再决定是否补新的资源列表生成逻辑
+只改适配器层：
 
-桌面壳、队列、并发、下载目录、失败重试这些层可以继续复用。
+1. 复制模板文件
+2. 实现 `resolveEpisodeDownload`
+3. 注册到 [src/sourceAdapters.ts](/D:/HongGuo_AutoTools/src/sourceAdapters.ts)
+
+### 批量迁移资源定义
+
+不用改代码，直接：
+
+1. 导出当前手动资源清单
+2. 修改 JSON
+3. 重新导入
+
+### 接团队内部资源库
+
+通常做法是：
+
+1. 约定 `series.sourceId`
+2. 用它去内部索引表或 API 里查每一集的真实地址
+3. 返回 `sourceUrl` 和 `fileName`
+
+## 验证状态
+
+当前项目已验证：
+
+- `npm run build`
+- `npm run lint`
+- `npm run build:desktop`
+
+桌面目录包输出位置：
+
+- `release/win-unpacked`

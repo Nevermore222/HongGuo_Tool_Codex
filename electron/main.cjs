@@ -390,6 +390,40 @@ ipcMain.handle('shell:open-path', async (_event, targetPath) => {
   return shell.openPath(targetPath)
 })
 
+ipcMain.handle('files:open-text', async () => {
+  const result = await dialog.showOpenDialog({
+    title: '选择资源清单文件',
+    filters: [{ name: 'JSON Files', extensions: ['json'] }],
+    properties: ['openFile'],
+  })
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return null
+  }
+
+  const [selectedPath] = result.filePaths
+  const content = await fsp.readFile(selectedPath, 'utf8')
+  return {
+    path: selectedPath,
+    content,
+  }
+})
+
+ipcMain.handle('files:save-text', async (_event, input) => {
+  const result = await dialog.showSaveDialog({
+    title: '导出资源清单',
+    defaultPath: input.defaultFileName || 'manual-sources.json',
+    filters: [{ name: 'JSON Files', extensions: ['json'] }],
+  })
+
+  if (result.canceled || !result.filePath) {
+    return null
+  }
+
+  await fsp.writeFile(result.filePath, input.content, 'utf8')
+  return result.filePath
+})
+
 ipcMain.handle('downloads:list', async () => listTaskSnapshots())
 
 ipcMain.handle('downloads:enqueue', async (_event, inputs) => {

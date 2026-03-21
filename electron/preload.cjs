@@ -12,6 +12,8 @@ contextBridge.exposeInMainWorld('desktopApi', {
   pauseDownload: (taskId) => ipcRenderer.invoke('downloads:pause', taskId),
   resumeDownload: (taskId) => ipcRenderer.invoke('downloads:resume', taskId),
   clearCompletedDownloads: () => ipcRenderer.invoke('downloads:clear-completed'),
+  openTextFile: () => ipcRenderer.invoke('files:open-text'),
+  saveTextFile: (input) => ipcRenderer.invoke('files:save-text', input),
   onDownloadsChanged: (callback) => {
     const listener = (_event, tasks) => callback(tasks)
     ipcRenderer.on('downloads:changed', listener)

@@ -6,6 +6,11 @@ import {
   isDesktopShellAvailable,
 } from './desktop'
 import {
+  mergeManualSources,
+  parseManualSourceManifest,
+  stringifyManualSourceManifest,
+} from './manualSources'
+import {
   getAdapterOptions,
   getCatalogFromAdapters,
   resolveEpisodeDownload,
@@ -39,6 +44,38 @@ const defaultManualForm: ManualSourceForm = {
   urlTemplate: '',
   note: '',
 }
+
+const buildManifestFileName = () => {
+  const stamp = new Date().toISOString().replaceAll(':', '-').replace(/\.\d+Z$/, 'Z')
+  return `manual-sources-${stamp}.json`
+}
+
+const downloadTextFileInBrowser = (fileName: string, content: string) => {
+  const blob = new Blob([content], { type: 'application/json;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = fileName
+  anchor.click()
+  URL.revokeObjectURL(url)
+}
+
+const readTextFileInBrowser = () =>
+  new Promise<string | null>((resolve) => {
+    const input = document.createElement('input')
+    input.type = 'file'
+    input.accept = '.json,application/json'
+    input.onchange = async () => {
+      const file = input.files?.[0]
+      if (!file) {
+        resolve(null)
+        return
+      }
+
+      resolve(await file.text())
+    }
+    input.click()
+  })
 
 const readStorage = <T,>(key: string, fallback: T): T => {
   if (typeof window === 'undefined') {
@@ -390,6 +427,55 @@ function App() {
         '手动资源已保存。若填写了直链模板，就可以直接触发真实下载任务。',
       )
     })
+  }
+
+  const handleExportManualSources = async () => {
+    try {
+      const content = stringifyManualSourceManifest(manualSources)
+      const fileName = buildManifestFileName()
+
+      if (desktopContext.isElectron && window.desktopApi) {
+        const filePath = await window.desktopApi.saveTextFile({
+          defaultFileName: fileName,
+          content,
+        })
+
+        if (!filePath) {
+          return
+        }
+
+        setActionMessage(`资源清单已导出到 ${filePath}`)
+        return
+      }
+
+      downloadTextFileInBrowser(fileName, content)
+      setActionMessage('资源清单已在浏览器中导出。')
+    } catch (error) {
+      setActionMessage(error instanceof Error ? error.message : '导出资源清单失败。')
+    }
+  }
+
+  const handleImportManualSources = async () => {
+    try {
+      const rawContent =
+        desktopContext.isElectron && window.desktopApi
+          ? (await window.desktopApi.openTextFile())?.content ?? null
+          : await readTextFileInBrowser()
+
+      if (!rawContent) {
+        return
+      }
+
+      const imported = parseManualSourceManifest(rawContent)
+      startTransition(() => {
+        setManualSources((current) => mergeManualSources(current, imported))
+        setActiveCategory('全部')
+        setSearchTerm('')
+      })
+      setActionMessage(`已导入 ${imported.length} 条资源定义，按 id 自动合并。`)
+    } catch (error) {
+      setActionMessage(error instanceof Error ? error.message : '导入资源清单失败。')
+    }
   }
 
   const toggleQueueItem = async (task: DesktopDownloadTask) => {
@@ -779,6 +865,16 @@ function App() {
                     <h3>手动导入合法资源</h3>
                   </div>
                   <span className="pill">模板令牌可替换</span>
+                </div>
+
+                <div className="button-row">
+                  <button className="small" onClick={() => void handleImportManualSources()}>
+                    导入资源清单
+                  </button>
+                  <button className="small ghost" onClick={() => void handleExportManualSources()}>
+                    导出资源清单
+                  </button>
+                  <span className="pill">当前 {manualSources.length} 条手动资源</span>
                 </div>
 
                 <form className="import-form" onSubmit={handleImport}>

@@ -3,6 +3,7 @@ import type {
   DesktopDownloadTask,
   DesktopSettings,
   EnqueueDownloadInput,
+  OpenTextFileResult,
 } from './desktop'
 
 type DesktopApi = {
@@ -21,6 +22,11 @@ type DesktopApi = {
   pauseDownload: (taskId: string) => Promise<DesktopDownloadTask[]>
   resumeDownload: (taskId: string) => Promise<DesktopDownloadTask[]>
   clearCompletedDownloads: () => Promise<DesktopDownloadTask[]>
+  openTextFile: () => Promise<OpenTextFileResult | null>
+  saveTextFile: (input: {
+    defaultFileName: string
+    content: string
+  }) => Promise<string | null>
   onDownloadsChanged: (
     callback: (tasks: DesktopDownloadTask[]) => void,
   ) => () => void

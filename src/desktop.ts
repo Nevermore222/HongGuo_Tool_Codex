@@ -51,6 +51,11 @@ export type DesktopDownloadTask = {
   errorMessage?: string
 }
 
+export type OpenTextFileResult = {
+  path: string
+  content: string
+}
+
 export const fallbackDesktopContext: DesktopContext = {
   isElectron: false,
   platform: 'web',
