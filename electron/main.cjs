@@ -63,6 +63,7 @@ const persistDownloadTasks = async () => {
     sourceUrl: task.sourceUrl,
     fileName: task.fileName,
     outputPath: task.outputPath,
+    tempPath: task.tempPath,
     progress: task.progress,
     transferredBytes: task.transferredBytes,
     totalBytes: task.totalBytes,
@@ -99,6 +100,20 @@ const fileExists = async (targetPath) => {
   }
 }
 
+const getTaskTempPath = (outputPath) => (outputPath ? `${outputPath}.part` : '')
+
+const removeTaskArtifacts = async (task, options = {}) => {
+  const { includeOutput = false } = options
+
+  if (task.tempPath) {
+    await fsp.rm(task.tempPath, { force: true }).catch(() => {})
+  }
+
+  if (includeOutput && task.outputPath) {
+    await fsp.rm(task.outputPath, { force: true }).catch(() => {})
+  }
+}
+
 const restoreDownloadTasks = async () => {
   const summary = {
     restored: 0,
@@ -127,6 +142,7 @@ const restoreDownloadTasks = async () => {
         sourceUrl: item.sourceUrl,
         fileName: item.fileName,
         outputPath: item.outputPath || '',
+        tempPath: item.tempPath || getTaskTempPath(item.outputPath || ''),
         progress: Number(item.progress) || 0,
         transferredBytes: Number(item.transferredBytes) || 0,
         totalBytes: Number(item.totalBytes) || 0,
@@ -141,26 +157,26 @@ const restoreDownloadTasks = async () => {
           task.status = '失败'
           task.errorMessage = '历史任务对应的已下载文件不存在，请重新下载。'
           task.outputPath = ''
+          task.tempPath = ''
           task.progress = 0
           task.transferredBytes = 0
           task.totalBytes = 0
           summary.missingCompletedFiles += 1
         }
       } else {
-        if (await fileExists(task.outputPath)) {
-          await fsp.rm(task.outputPath, { force: true })
-        }
-
         if (task.status === '下载中' || task.status === '等待中') {
           task.status = '等待中'
           task.errorMessage = '应用重启后已恢复为等待中。'
           summary.resumedAsWaiting += 1
         }
 
-        task.outputPath = ''
-        task.progress = 0
-        task.transferredBytes = 0
-        task.totalBytes = 0
+        const tempExists = await fileExists(task.tempPath)
+        if (!tempExists) {
+          task.progress = 0
+          task.transferredBytes = 0
+          task.totalBytes = 0
+          task.tempPath = task.outputPath ? getTaskTempPath(task.outputPath) : ''
+        }
       }
 
       downloadTasks.set(task.id, task)
@@ -277,10 +293,15 @@ const updateTaskProgress = (task, transferredBytes, totalBytes) => {
 
 const downloadLocalFile = async (sourcePath, outputPath, task, signal) => {
   const stats = await fsp.stat(sourcePath)
-  let transferred = 0
+  const offset = task.transferredBytes
+  let transferred = offset
 
-  const readStream = fs.createReadStream(sourcePath)
-  const writeStream = fs.createWriteStream(outputPath)
+  const readStream = fs.createReadStream(sourcePath, {
+    start: offset > 0 ? offset : undefined,
+  })
+  const writeStream = fs.createWriteStream(outputPath, {
+    flags: offset > 0 ? 'a' : 'w',
+  })
   const detachAbort = attachAbort(signal, [readStream, writeStream])
 
   readStream.on('data', (chunk) => {
@@ -295,7 +316,14 @@ const downloadLocalFile = async (sourcePath, outputPath, task, signal) => {
   }
 }
 
-const downloadHttpFile = (sourceUrl, outputPath, task, signal, redirectCount = 0) =>
+const downloadHttpFile = (
+  sourceUrl,
+  outputPath,
+  task,
+  signal,
+  resumeOffset = 0,
+  redirectCount = 0,
+) =>
   new Promise((resolve, reject) => {
     if (redirectCount > 5) {
       reject(new Error('重定向次数过多，已停止下载。'))
@@ -304,8 +332,9 @@ const downloadHttpFile = (sourceUrl, outputPath, task, signal, redirectCount = 0
 
     const requestUrl = new URL(sourceUrl)
     const transport = requestUrl.protocol === 'https:' ? https : http
-    let transferred = 0
-    const request = transport.get(requestUrl, (response) => {
+    let transferred = resumeOffset
+    const requestHeaders = resumeOffset > 0 ? { Range: `bytes=${resumeOffset}-` } : {}
+    const request = transport.get(requestUrl, { headers: requestHeaders }, (response) => {
       if (
         response.statusCode &&
         response.statusCode >= 300 &&
@@ -314,18 +343,44 @@ const downloadHttpFile = (sourceUrl, outputPath, task, signal, redirectCount = 0
       ) {
         response.resume()
         const redirectTarget = new URL(response.headers.location, requestUrl).toString()
-        resolve(downloadHttpFile(redirectTarget, outputPath, task, signal, redirectCount + 1))
+        resolve(
+          downloadHttpFile(
+            redirectTarget,
+            outputPath,
+            task,
+            signal,
+            resumeOffset,
+            redirectCount + 1,
+          ),
+        )
         return
       }
 
-      if (response.statusCode !== 200) {
+      const isPartial = response.statusCode === 206
+      const isFullContent = response.statusCode === 200
+
+      if (!isPartial && !isFullContent) {
         response.resume()
         reject(new Error(`下载失败，HTTP 状态码 ${response.statusCode || 'unknown'}`))
         return
       }
 
-      const totalBytes = Number(response.headers['content-length'] || 0)
-      const writeStream = fs.createWriteStream(outputPath)
+      const contentLength = Number(response.headers['content-length'] || 0)
+      const totalBytes =
+        isPartial && resumeOffset > 0 ? resumeOffset + contentLength : contentLength
+      const shouldAppend = isPartial && resumeOffset > 0
+      const effectiveOffset = shouldAppend ? resumeOffset : 0
+
+      if (resumeOffset > 0 && !shouldAppend) {
+        task.errorMessage = '当前源不支持断点续传，已自动改为从头下载。'
+        task.progress = 0
+        task.transferredBytes = 0
+        transferred = 0
+      }
+
+      const writeStream = fs.createWriteStream(outputPath, {
+        flags: shouldAppend ? 'a' : 'w',
+      })
       const detachAbort = attachAbort(signal, [request, response, writeStream])
 
       response.on('data', (chunk) => {
@@ -354,7 +409,13 @@ const downloadHttpFile = (sourceUrl, outputPath, task, signal, redirectCount = 0
 
 const downloadToFile = async (task, outputPath, signal) => {
   if (/^https?:\/\//i.test(task.sourceUrl)) {
-    await downloadHttpFile(task.sourceUrl, outputPath, task, signal)
+    await downloadHttpFile(
+      task.sourceUrl,
+      outputPath,
+      task,
+      signal,
+      task.transferredBytes || 0,
+    )
     return
   }
 
@@ -373,39 +434,43 @@ const startTask = async (task) => {
   const settings = await ensureSettings()
   await fsp.mkdir(settings.downloadDirectory, { recursive: true })
 
+  if (!task.outputPath) {
+    task.outputPath = await reserveOutputPath(settings.downloadDirectory, task.fileName)
+  }
+  task.tempPath = task.tempPath || getTaskTempPath(task.outputPath)
+
+  const tempExists = await fileExists(task.tempPath)
+  if (tempExists) {
+    const stats = await fsp.stat(task.tempPath)
+    task.transferredBytes = stats.size
+  } else {
+    task.transferredBytes = 0
+  }
+
   task.status = '下载中'
   task.progress = Math.max(task.progress, 1)
-  task.errorMessage = ''
-  task.transferredBytes = 0
-  task.totalBytes = 0
-  task.outputPath = await reserveOutputPath(settings.downloadDirectory, task.fileName)
+  task.errorMessage = task.errorMessage === '应用重启后已恢复为等待中。' ? '' : task.errorMessage
+  task.totalBytes = Math.max(task.totalBytes || 0, task.transferredBytes)
   broadcastDownloads()
 
   const controller = new AbortController()
   activeDownloads.set(task.id, controller)
 
   try {
-    await downloadToFile(task, task.outputPath, controller.signal)
+    await downloadToFile(task, task.tempPath, controller.signal)
+    await fsp.rename(task.tempPath, task.outputPath)
+    task.tempPath = ''
     task.progress = 100
     task.status = '已完成'
+    task.errorMessage = ''
   } catch (error) {
     const isPaused =
       controller.signal.aborted && controller.signal.reason === 'paused'
 
-    try {
-      if (task.outputPath) {
-        await fsp.rm(task.outputPath, { force: true })
-      }
-    } catch {}
-
     if (isPaused) {
       task.status = '已暂停'
-      task.progress = 0
-      task.outputPath = ''
     } else {
       task.status = '失败'
-      task.progress = 0
-      task.outputPath = ''
       task.errorMessage = error instanceof Error ? error.message : '下载失败'
     }
   } finally {
@@ -567,6 +632,7 @@ ipcMain.handle('downloads:enqueue', async (_event, inputs) => {
         sourceUrl: input.sourceUrl,
         fileName: input.fileName,
         outputPath: '',
+        tempPath: '',
         progress: 0,
         transferredBytes: 0,
         totalBytes: 0,
@@ -609,10 +675,6 @@ ipcMain.handle('downloads:resume', async (_event, taskId) => {
 
   if (task.status === '已暂停' || task.status === '失败') {
     task.status = '等待中'
-    task.progress = 0
-    task.transferredBytes = 0
-    task.totalBytes = 0
-    task.outputPath = ''
     task.errorMessage = ''
   }
 
@@ -625,10 +687,6 @@ ipcMain.handle('downloads:retry-failed', async () => {
   for (const task of downloadTasks.values()) {
     if (task.status === '失败') {
       task.status = '等待中'
-      task.progress = 0
-      task.transferredBytes = 0
-      task.totalBytes = 0
-      task.outputPath = ''
       task.errorMessage = ''
     }
   }
@@ -641,6 +699,7 @@ ipcMain.handle('downloads:retry-failed', async () => {
 ipcMain.handle('downloads:clear-completed', async () => {
   for (const [taskId, task] of downloadTasks.entries()) {
     if (task.status === '已完成') {
+      await removeTaskArtifacts(task, { includeOutput: true })
       downloadTasks.delete(taskId)
     }
   }
@@ -652,6 +711,7 @@ ipcMain.handle('downloads:clear-completed', async () => {
 ipcMain.handle('downloads:clear-failed', async () => {
   for (const [taskId, task] of downloadTasks.entries()) {
     if (task.status === '失败') {
+      await removeTaskArtifacts(task)
       downloadTasks.delete(taskId)
     }
   }

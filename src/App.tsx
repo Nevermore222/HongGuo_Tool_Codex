@@ -1012,8 +1012,8 @@ function App() {
                   />
                 </label>
                 <p className="control-note">
-                  下载执行层已支持真实直链文件下载，后续只要让适配器返回 `sourceUrl`
-                  和文件名即可接入。
+                  下载执行层现在支持暂停后按已下载字节继续。后续只要让适配器返回
+                  `sourceUrl` 和文件名即可接入。
                 </p>
               </section>
 
