@@ -22,6 +22,9 @@ contextBridge.exposeInMainWorld('desktopApi', {
   saveTextFile: (input) => ipcRenderer.invoke('files:save-text', input),
   fetchDiscoveryManifest: (input) => ipcRenderer.invoke('discovery:fetch-remote', input),
   getCachedDiscoveryManifest: () => ipcRenderer.invoke('discovery:read-cache'),
+  getDiscoverySyncHistory: () => ipcRenderer.invoke('discovery-history:list'),
+  appendDiscoverySyncHistory: (entry) => ipcRenderer.invoke('discovery-history:append', entry),
+  clearDiscoverySyncHistory: () => ipcRenderer.invoke('discovery-history:clear'),
   getDownloadRecoverySummary: () => ipcRenderer.invoke('downloads:get-recovery-summary'),
   onDownloadsChanged: (callback) => {
     const listener = (_event, tasks) => callback(tasks)

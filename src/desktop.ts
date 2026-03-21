@@ -98,6 +98,19 @@ export type DiscoveryCatalogSnapshot = {
   series: DiscoveredSeriesRecord[]
 }
 
+export type DiscoverySyncMode = 'api' | 'cache' | 'file'
+
+export type DiscoverySyncHistoryEntry = {
+  id: string
+  sourceName: string
+  endpointUrl: string
+  mode: DiscoverySyncMode
+  status: '成功' | '失败'
+  itemCount: number
+  message: string
+  timestamp: string
+}
+
 export const fallbackDesktopContext: DesktopContext = {
   isElectron: false,
   platform: 'web',

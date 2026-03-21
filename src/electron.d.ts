@@ -1,5 +1,6 @@
 import type {
   DiscoveryCacheSnapshot,
+  DiscoverySyncHistoryEntry,
   DiscoverySyncInput,
   DesktopContext,
   DesktopDownloadLogEntry,
@@ -41,6 +42,13 @@ type DesktopApi = {
     input: DiscoverySyncInput,
   ) => Promise<DiscoveryCacheSnapshot>
   getCachedDiscoveryManifest: () => Promise<DiscoveryCacheSnapshot | null>
+  getDiscoverySyncHistory: () => Promise<DiscoverySyncHistoryEntry[]>
+  appendDiscoverySyncHistory: (
+    entry: Omit<DiscoverySyncHistoryEntry, 'id' | 'timestamp'> & {
+      timestamp?: string
+    },
+  ) => Promise<DiscoverySyncHistoryEntry[]>
+  clearDiscoverySyncHistory: () => Promise<DiscoverySyncHistoryEntry[]>
   getDownloadRecoverySummary: () => Promise<DesktopDownloadRecoverySummary | null>
   onDownloadsChanged: (
     callback: (tasks: DesktopDownloadTask[]) => void,

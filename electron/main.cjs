@@ -10,13 +10,16 @@ const { fileURLToPath, URL } = require('node:url')
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL)
 const downloadTasks = new Map()
 const downloadLogs = []
+const discoverySyncHistory = []
 const activeDownloads = new Map()
 let schedulerActive = false
 let scheduleAgain = false
 let lastRecoverySummary = null
 let persistTasksTimer = null
 let persistLogsTimer = null
+let persistDiscoveryHistoryTimer = null
 const maxDownloadLogs = 2000
+const maxDiscoveryHistoryEntries = 200
 
 const defaultSettings = () => ({
   downloadDirectory: app.getPath('downloads'),
@@ -30,6 +33,8 @@ const getTasksPath = () => path.join(app.getPath('userData'), 'download-tasks.js
 const getLogsPath = () => path.join(app.getPath('userData'), 'download-logs.json')
 const getDiscoveryCachePath = () =>
   path.join(app.getPath('userData'), 'discovery-library-cache.json')
+const getDiscoveryHistoryPath = () =>
+  path.join(app.getPath('userData'), 'discovery-sync-history.json')
 
 const ensureSettings = async () => {
   const filePath = getSettingsPath()
@@ -87,6 +92,15 @@ const persistDownloadLogs = async () => {
   await fsp.writeFile(getLogsPath(), JSON.stringify(downloadLogs, null, 2), 'utf8')
 }
 
+const persistDiscoverySyncHistory = async () => {
+  await fsp.mkdir(path.dirname(getDiscoveryHistoryPath()), { recursive: true })
+  await fsp.writeFile(
+    getDiscoveryHistoryPath(),
+    JSON.stringify(discoverySyncHistory, null, 2),
+    'utf8',
+  )
+}
+
 const schedulePersistDownloadTasks = () => {
   if (persistTasksTimer) {
     clearTimeout(persistTasksTimer)
@@ -106,6 +120,17 @@ const schedulePersistDownloadLogs = () => {
   persistLogsTimer = setTimeout(() => {
     persistLogsTimer = null
     void persistDownloadLogs()
+  }, 180)
+}
+
+const schedulePersistDiscoverySyncHistory = () => {
+  if (persistDiscoveryHistoryTimer) {
+    clearTimeout(persistDiscoveryHistoryTimer)
+  }
+
+  persistDiscoveryHistoryTimer = setTimeout(() => {
+    persistDiscoveryHistoryTimer = null
+    void persistDiscoverySyncHistory()
   }, 180)
 }
 
@@ -210,6 +235,74 @@ const restoreDownloadLogs = async () => {
         level: item.level || '信息',
         message: item.message || '',
         timestamp: item.timestamp || new Date().toISOString(),
+      })
+    }
+  } catch {}
+}
+
+const listDiscoverySyncHistorySnapshots = () =>
+  [...discoverySyncHistory].sort(
+    (left, right) =>
+      new Date(right.timestamp).getTime() - new Date(left.timestamp).getTime(),
+  )
+
+const appendDiscoverySyncHistoryEntry = (entry) => {
+  if (!entry || typeof entry !== 'object') {
+    return listDiscoverySyncHistorySnapshots()
+  }
+
+  discoverySyncHistory.push({
+    id: `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+    sourceName: String(entry.sourceName || '未命名来源'),
+    endpointUrl: String(entry.endpointUrl || ''),
+    mode: entry.mode === 'cache' || entry.mode === 'file' ? entry.mode : 'api',
+    status: entry.status === '失败' ? '失败' : '成功',
+    itemCount: Math.max(0, Number(entry.itemCount) || 0),
+    message: String(entry.message || ''),
+    timestamp:
+      typeof entry.timestamp === 'string' && entry.timestamp
+        ? entry.timestamp
+        : new Date().toISOString(),
+  })
+
+  if (discoverySyncHistory.length > maxDiscoveryHistoryEntries) {
+    discoverySyncHistory.splice(
+      0,
+      discoverySyncHistory.length - maxDiscoveryHistoryEntries,
+    )
+  }
+
+  schedulePersistDiscoverySyncHistory()
+  return listDiscoverySyncHistorySnapshots()
+}
+
+const restoreDiscoverySyncHistory = async () => {
+  try {
+    const raw = await fsp.readFile(getDiscoveryHistoryPath(), 'utf8')
+    const parsed = JSON.parse(raw)
+
+    if (!Array.isArray(parsed)) {
+      return
+    }
+
+    discoverySyncHistory.length = 0
+    for (const item of parsed.slice(-maxDiscoveryHistoryEntries)) {
+      if (!item || typeof item !== 'object') {
+        continue
+      }
+
+      discoverySyncHistory.push({
+        id: item.id || `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+        sourceName: String(item.sourceName || '未命名来源'),
+        endpointUrl: String(item.endpointUrl || ''),
+        mode: item.mode === 'cache' || item.mode === 'file' ? item.mode : 'api',
+        status: item.status === '失败' ? '失败' : '成功',
+        itemCount: Math.max(0, Number(item.itemCount) || 0),
+        message: String(item.message || ''),
+        timestamp:
+          typeof item.timestamp === 'string' && item.timestamp
+            ? item.timestamp
+            : new Date().toISOString(),
       })
     }
   } catch {}
@@ -848,6 +941,15 @@ ipcMain.handle('discovery:fetch-remote', async (_event, input) => {
 })
 
 ipcMain.handle('discovery:read-cache', async () => readDiscoveryCache())
+ipcMain.handle('discovery-history:list', async () => listDiscoverySyncHistorySnapshots())
+ipcMain.handle('discovery-history:append', async (_event, entry) =>
+  appendDiscoverySyncHistoryEntry(entry),
+)
+ipcMain.handle('discovery-history:clear', async () => {
+  discoverySyncHistory.length = 0
+  schedulePersistDiscoverySyncHistory()
+  return listDiscoverySyncHistorySnapshots()
+})
 
 ipcMain.handle('downloads:list', async () => listTaskSnapshots())
 ipcMain.handle('download-logs:list', async () => listDownloadLogSnapshots())
@@ -1011,6 +1113,7 @@ ipcMain.handle('downloads:show-in-folder', async (_event, taskId) => {
 app.whenReady().then(async () => {
   await ensureSettings()
   await restoreDownloadLogs()
+  await restoreDiscoverySyncHistory()
   await restoreDownloadTasks()
   await createWindow()
   void maybeStartDownloads()
@@ -1037,6 +1140,11 @@ app.on('before-quit', () => {
     clearTimeout(persistLogsTimer)
     persistLogsTimer = null
   }
+  if (persistDiscoveryHistoryTimer) {
+    clearTimeout(persistDiscoveryHistoryTimer)
+    persistDiscoveryHistoryTimer = null
+  }
   void persistDownloadTasks()
   void persistDownloadLogs()
+  void persistDiscoverySyncHistory()
 })

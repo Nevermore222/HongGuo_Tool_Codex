@@ -23,6 +23,7 @@ import {
 import type { Episode, Resolution, Series } from './catalog'
 import type {
   DiscoveryCacheSnapshot,
+  DiscoverySyncHistoryEntry,
   DesktopContext,
   DesktopDownloadLogEntry,
   DesktopDownloadTask,
@@ -60,6 +61,7 @@ const libraryStorageKey = 'hongguo-tool-framework-library'
 const discoveryApiConfigKey = 'hongguo-tool-framework-discovery-api-config'
 const discoveryApiCacheKey = 'hongguo-tool-framework-discovery-api-cache'
 const discoverySourcesKey = 'hongguo-tool-framework-discovery-sources'
+const discoveryHistoryKey = 'hongguo-tool-framework-discovery-history'
 const previewVideoUrl =
   'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4'
 
@@ -158,6 +160,16 @@ const formatUpdatedAt = (value: string) =>
 const formatLogTime = (value: string) =>
   new Date(value).toLocaleString('zh-CN', { hour12: false })
 
+const formatSyncMode = (value: DiscoverySyncHistoryEntry['mode']) => {
+  if (value === 'file') {
+    return '本地清单'
+  }
+  if (value === 'cache') {
+    return '缓存恢复'
+  }
+  return 'API 同步'
+}
+
 const formatPercent = (value: number) => `${value.toFixed(value >= 10 ? 0 : 1)}%`
 
 const formatBytes = (bytes: number) => {
@@ -230,6 +242,10 @@ function App() {
     discoveryApiCacheKey,
     null,
   )
+  const initialDiscoveryHistory = readStorage<DiscoverySyncHistoryEntry[]>(
+    discoveryHistoryKey,
+    [],
+  )
   const initialSeries = getCatalogFromAdapters(initialManualSources, initialDiscoveredSeries)
   const [desktopContext, setDesktopContext] =
     useState<DesktopContext>(fallbackDesktopContext)
@@ -247,6 +263,8 @@ function App() {
     useState<DiscoveryEndpointConfig[]>(initialDiscoverySources)
   const [discoveryCache, setDiscoveryCache] =
     useState<DiscoveryCacheSnapshot | null>(initialDiscoveryCache)
+  const [discoveryHistory, setDiscoveryHistory] =
+    useState<DiscoverySyncHistoryEntry[]>(initialDiscoveryHistory)
   const [discoverySyncing, setDiscoverySyncing] = useState(false)
   const [browserQueue, setBrowserQueue] = useState<DesktopDownloadTask[]>(() =>
     readStorage(queueStorageKey, []),
@@ -285,6 +303,16 @@ function App() {
       ),
     [discoverySources],
   )
+
+  const discoveryHistoryStats = useMemo(() => {
+    const success = discoveryHistory.filter((item) => item.status === '成功').length
+    const failed = discoveryHistory.filter((item) => item.status === '失败').length
+    return {
+      success,
+      failed,
+      total: discoveryHistory.length,
+    }
+  }, [discoveryHistory])
 
   const categories = useMemo(
     () => ['全部', ...new Set(allSeries.map((item) => item.category))],
@@ -372,13 +400,22 @@ function App() {
         return
       }
 
-      const [context, settings, downloads, logs, recovery, cachedDiscovery] = await Promise.all([
+      const [
+        context,
+        settings,
+        downloads,
+        logs,
+        recovery,
+        cachedDiscovery,
+        syncHistory,
+      ] = await Promise.all([
         window.desktopApi.getContext(),
         window.desktopApi.getSettings(),
         window.desktopApi.getDownloads(),
         window.desktopApi.getDownloadLogs(),
         window.desktopApi.getDownloadRecoverySummary(),
         window.desktopApi.getCachedDiscoveryManifest(),
+        window.desktopApi.getDiscoverySyncHistory(),
       ])
 
       if (disposed) {
@@ -405,6 +442,7 @@ function App() {
         if (cachedDiscovery) {
           setDiscoveryCache(cachedDiscovery)
         }
+        setDiscoveryHistory(syncHistory)
         setActionMessage(buildRecoveryMessage(recovery))
         setDesktopReady(true)
       })
@@ -447,6 +485,13 @@ function App() {
       JSON.stringify(discoveryCache),
     )
   }, [discoveryCache])
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      discoveryHistoryKey,
+      JSON.stringify(discoveryHistory),
+    )
+  }, [discoveryHistory])
 
   useEffect(() => {
     if (!desktopContext.isElectron) {
@@ -853,8 +898,24 @@ function App() {
         setActiveCategory('全部')
         setSearchTerm('')
       })
+      await appendDiscoveryHistory({
+        sourceName: '本地资源库清单',
+        endpointUrl: 'local-file',
+        mode: 'file',
+        status: '成功',
+        itemCount: imported.length,
+        message: '从本地 JSON 清单导入资源库。',
+      })
       setActionMessage(`已导入 ${imported.length} 条资源库定义，按 id 自动合并。`)
     } catch (error) {
+      await appendDiscoveryHistory({
+        sourceName: '本地资源库清单',
+        endpointUrl: 'local-file',
+        mode: 'file',
+        status: '失败',
+        itemCount: 0,
+        message: error instanceof Error ? error.message : '导入资源库清单失败。',
+      })
       setActionMessage(error instanceof Error ? error.message : '导入资源库清单失败。')
     }
   }
@@ -938,6 +999,45 @@ function App() {
     })
   }
 
+  const appendDiscoveryHistory = async (
+    entry: Omit<DiscoverySyncHistoryEntry, 'id' | 'timestamp'> & {
+      timestamp?: string
+    },
+  ) => {
+    if (desktopContext.isElectron && window.desktopApi) {
+      const next = await window.desktopApi.appendDiscoverySyncHistory(entry)
+      startTransition(() => {
+        setDiscoveryHistory(next)
+      })
+      return
+    }
+
+    startTransition(() => {
+      setDiscoveryHistory((current) => [
+        {
+          id: `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+          timestamp: entry.timestamp ?? new Date().toISOString(),
+          ...entry,
+        },
+        ...current,
+      ].slice(0, 200))
+    })
+  }
+
+  const clearDiscoveryHistory = async () => {
+    if (desktopContext.isElectron && window.desktopApi) {
+      const next = await window.desktopApi.clearDiscoverySyncHistory()
+      startTransition(() => {
+        setDiscoveryHistory(next)
+      })
+      setActionMessage('资源发现同步历史已清空。')
+      return
+    }
+
+    setDiscoveryHistory([])
+    setActionMessage('资源发现同步历史已清空。')
+  }
+
   const syncDiscoveredSeriesFromApi = async () => {
     try {
       const endpointUrl = discoveryApiForm.endpointUrl.trim()
@@ -978,8 +1078,25 @@ function App() {
         setSearchTerm('')
       })
       touchDiscoverySource(endpointUrl, discoveryApiForm.headersText)
+      await appendDiscoveryHistory({
+        sourceName: endpointUrl,
+        endpointUrl,
+        mode: 'api',
+        status: '成功',
+        itemCount: imported.length,
+        message: '通过内部 API 同步资源库并写入本地缓存。',
+        timestamp: snapshot.fetchedAt,
+      })
       setActionMessage(`已从 API 同步 ${imported.length} 条资源库定义，并缓存到本地。`)
     } catch (error) {
+      await appendDiscoveryHistory({
+        sourceName: discoveryApiForm.endpointUrl.trim() || '未命名来源',
+        endpointUrl: discoveryApiForm.endpointUrl.trim(),
+        mode: 'api',
+        status: '失败',
+        itemCount: 0,
+        message: error instanceof Error ? error.message : '同步资源库失败。',
+      })
       setActionMessage(error instanceof Error ? error.message : '同步资源库失败。')
     } finally {
       setDiscoverySyncing(false)
@@ -1006,8 +1123,24 @@ function App() {
         setActiveCategory('全部')
         setSearchTerm('')
       })
+      await appendDiscoveryHistory({
+        sourceName: snapshot.endpointUrl || '本地缓存',
+        endpointUrl: snapshot.endpointUrl,
+        mode: 'cache',
+        status: '成功',
+        itemCount: imported.length,
+        message: '从本地缓存恢复资源库。',
+      })
       setActionMessage(`已从本地缓存恢复 ${imported.length} 条资源库定义。`)
     } catch (error) {
+      await appendDiscoveryHistory({
+        sourceName: discoveryCache?.endpointUrl || '本地缓存',
+        endpointUrl: discoveryCache?.endpointUrl || '',
+        mode: 'cache',
+        status: '失败',
+        itemCount: 0,
+        message: error instanceof Error ? error.message : '恢复资源库缓存失败。',
+      })
       setActionMessage(error instanceof Error ? error.message : '恢复资源库缓存失败。')
     }
   }
@@ -1053,8 +1186,25 @@ function App() {
         setSearchTerm('')
       })
       touchDiscoverySource(source.endpointUrl, source.headersText)
+      await appendDiscoveryHistory({
+        sourceName: source.name,
+        endpointUrl: source.endpointUrl,
+        mode: 'api',
+        status: '成功',
+        itemCount: imported.length,
+        message: '通过已保存资源发现源同步资源库。',
+        timestamp: snapshot.fetchedAt,
+      })
       setActionMessage(`已通过已保存源 ${source.name} 同步 ${imported.length} 条资源库定义。`)
     } catch (error) {
+      await appendDiscoveryHistory({
+        sourceName: source.name,
+        endpointUrl: source.endpointUrl,
+        mode: 'api',
+        status: '失败',
+        itemCount: 0,
+        message: error instanceof Error ? error.message : '同步资源库失败。',
+      })
       setActionMessage(error instanceof Error ? error.message : '同步资源库失败。')
     } finally {
       setDiscoverySyncing(false)
@@ -1830,6 +1980,50 @@ function App() {
                             >
                               删除
                             </button>
+                          </div>
+                        </article>
+                      ))
+                    )}
+                  </div>
+                </div>
+
+                <div className="stats-card">
+                  <div className="section-header compact">
+                    <div>
+                      <span className="section-label">同步历史</span>
+                    </div>
+                    <div className="queue-stats">
+                      <span>成功 {discoveryHistoryStats.success}</span>
+                      <span>失败 {discoveryHistoryStats.failed}</span>
+                    </div>
+                  </div>
+                  <div className="button-row">
+                    <span className="pill">共 {discoveryHistoryStats.total} 条</span>
+                    <button
+                      className="small ghost"
+                      onClick={() => void clearDiscoveryHistory()}
+                      disabled={discoveryHistoryStats.total === 0}
+                    >
+                      清空历史
+                    </button>
+                  </div>
+                  <div className="stats-list">
+                    {discoveryHistory.length === 0 ? (
+                      <div className="empty-state">
+                        还没有同步历史。导入本地清单、从缓存恢复或从 API 同步后，这里会记录结果。
+                      </div>
+                    ) : (
+                      discoveryHistory.map((item) => (
+                        <article key={item.id} className="stats-row">
+                          <div>
+                            <strong>
+                              {item.sourceName} · {formatSyncMode(item.mode)} · {item.status}
+                            </strong>
+                            <p>{item.endpointUrl || 'local-file'}</p>
+                            <p>
+                              {formatUpdatedAt(item.timestamp)} · 条目数 {item.itemCount}
+                            </p>
+                            <p>{item.message}</p>
                           </div>
                         </article>
                       ))

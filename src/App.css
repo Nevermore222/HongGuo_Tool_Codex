@@ -162,6 +162,10 @@
   color: var(--muted);
 }
 
+.stats-row strong {
+  color: var(--text-strong);
+}
+
 .section-header.compact {
   align-items: center;
 }
