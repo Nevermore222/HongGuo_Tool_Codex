@@ -55,6 +55,8 @@ type DiscoveryEndpointConfig = {
   lastUsedAt: string
 }
 
+type PanelKey = 'desktop' | 'stats' | 'discovery' | 'manual' | 'logs'
+
 const queueStorageKey = 'hongguo-tool-framework-queue'
 const manualStorageKey = 'hongguo-tool-framework-manual'
 const libraryStorageKey = 'hongguo-tool-framework-library'
@@ -76,6 +78,14 @@ const defaultManualForm: ManualSourceForm = {
 const defaultDiscoveryApiForm: DiscoveryApiForm = {
   endpointUrl: '',
   headersText: '{\n  "Authorization": "Bearer your-token"\n}',
+}
+
+const defaultCollapsedPanels: Record<PanelKey, boolean> = {
+  desktop: false,
+  stats: true,
+  discovery: false,
+  manual: true,
+  logs: true,
 }
 
 const buildDiscoverySourceId = () =>
@@ -266,6 +276,8 @@ function App() {
   const [discoveryHistory, setDiscoveryHistory] =
     useState<DiscoverySyncHistoryEntry[]>(initialDiscoveryHistory)
   const [discoverySyncing, setDiscoverySyncing] = useState(false)
+  const [collapsedPanels, setCollapsedPanels] =
+    useState<Record<PanelKey, boolean>>(defaultCollapsedPanels)
   const [browserQueue, setBrowserQueue] = useState<DesktopDownloadTask[]>(() =>
     readStorage(queueStorageKey, []),
   )
@@ -1326,6 +1338,13 @@ function App() {
     setActionMessage('下载日志已清空。')
   }
 
+  const togglePanel = (panel: PanelKey) => {
+    setCollapsedPanels((current) => ({
+      ...current,
+      [panel]: !current[panel],
+    }))
+  }
+
   const inspectAdapterTasks = (adapterId: string) => {
     setQueueSearchTerm(adapterId)
     setQueueStatusFilter('全部')
@@ -1689,17 +1708,31 @@ function App() {
 
           <div className="import-panel card">
             <div className="panel-stack">
-              <section className="desktop-panel">
+              <section
+                className={
+                  collapsedPanels.desktop
+                    ? 'panel-section desktop-panel collapsed'
+                    : 'panel-section desktop-panel'
+                }
+              >
                 <div className="section-header">
                   <div>
                     <p className="eyebrow">桌面环境</p>
                     <h3>Electron 工作区</h3>
                   </div>
-                  <span className="pill">
-                    {desktopContext.platform} · v{desktopContext.version}
-                  </span>
+                  <div className="section-actions">
+                    <span className="pill">
+                      {desktopContext.platform} · v{desktopContext.version}
+                    </span>
+                    <button
+                      className="collapse-toggle"
+                      onClick={() => togglePanel('desktop')}
+                    >
+                      {collapsedPanels.desktop ? '展开' : '收起'}
+                    </button>
+                  </div>
                 </div>
-
+                <div className="panel-content">
                 <div className="info-grid">
                   <article className="info-card">
                     <span>运行模式</span>
@@ -1757,17 +1790,30 @@ function App() {
                   下载执行层现在支持暂停后按已下载字节继续。后续只要让适配器返回
                   `sourceUrl` 和文件名即可接入。
                 </p>
+                </div>
               </section>
 
-              <section>
+              <section
+                className={
+                  collapsedPanels.stats ? 'panel-section collapsed' : 'panel-section'
+                }
+              >
                 <div className="section-header">
                   <div>
                     <p className="eyebrow">统计面板</p>
                     <h3>下载健康度</h3>
                   </div>
-                  <span className="pill">基于当前任务队列实时计算</span>
+                  <div className="section-actions">
+                    <span className="pill">基于当前任务队列实时计算</span>
+                    <button
+                      className="collapse-toggle"
+                      onClick={() => togglePanel('stats')}
+                    >
+                      {collapsedPanels.stats ? '展开' : '收起'}
+                    </button>
+                  </div>
                 </div>
-
+                <div className="panel-content">
                 <div className="info-grid">
                   <article className="info-card">
                     <span>完成成功率</span>
@@ -1850,17 +1896,30 @@ function App() {
                     </div>
                   </div>
                 </div>
+                </div>
               </section>
 
-              <section>
+              <section
+                className={
+                  collapsedPanels.discovery ? 'panel-section collapsed' : 'panel-section'
+                }
+              >
                 <div className="section-header">
                   <div>
                     <p className="eyebrow">资源发现</p>
                     <h3>导入本地资源库清单</h3>
                   </div>
-                  <span className="pill">本地 JSON + 内部 HTTP API</span>
+                  <div className="section-actions">
+                    <span className="pill">本地 JSON + 内部 HTTP API</span>
+                    <button
+                      className="collapse-toggle"
+                      onClick={() => togglePanel('discovery')}
+                    >
+                      {collapsedPanels.discovery ? '展开' : '收起'}
+                    </button>
+                  </div>
                 </div>
-
+                <div className="panel-content">
                 <div className="button-row">
                   <button className="small" onClick={() => void handleImportDiscoveredSeries()}>
                     导入资源库清单
@@ -2035,17 +2094,30 @@ function App() {
                   资源发现层适合一次导入多部剧的元数据与集列表。清单里只放你有权使用的资源定义，
                   实际下载地址仍由适配器层解析，和下载执行层保持解耦。
                 </div>
+                </div>
               </section>
 
-              <section>
+              <section
+                className={
+                  collapsedPanels.manual ? 'panel-section collapsed' : 'panel-section'
+                }
+              >
                 <div className="section-header">
                   <div>
                     <p className="eyebrow">资源适配</p>
                     <h3>手动导入合法资源</h3>
                   </div>
-                  <span className="pill">模板令牌可替换</span>
+                  <div className="section-actions">
+                    <span className="pill">模板令牌可替换</span>
+                    <button
+                      className="collapse-toggle"
+                      onClick={() => togglePanel('manual')}
+                    >
+                      {collapsedPanels.manual ? '展开' : '收起'}
+                    </button>
+                  </div>
                 </div>
-
+                <div className="panel-content">
                 <div className="button-row">
                   <button className="small" onClick={() => void handleImportManualSources()}>
                     导入资源清单
@@ -2139,21 +2211,34 @@ function App() {
                     保存到资源库
                   </button>
                 </form>
+                </div>
               </section>
 
-              <section>
+              <section
+                className={
+                  collapsedPanels.logs ? 'panel-section collapsed' : 'panel-section'
+                }
+              >
                 <div className="section-header">
                   <div>
                     <p className="eyebrow">日志中心</p>
                     <h3>下载日志</h3>
                   </div>
-                  <div className="queue-stats">
-                    <span>信息 {logStats.info}</span>
-                    <span>警告 {logStats.warning}</span>
-                    <span>错误 {logStats.error}</span>
+                  <div className="section-actions">
+                    <div className="queue-stats">
+                      <span>信息 {logStats.info}</span>
+                      <span>警告 {logStats.warning}</span>
+                      <span>错误 {logStats.error}</span>
+                    </div>
+                    <button
+                      className="collapse-toggle"
+                      onClick={() => togglePanel('logs')}
+                    >
+                      {collapsedPanels.logs ? '展开' : '收起'}
+                    </button>
                   </div>
                 </div>
-
+                <div className="panel-content">
                 <div className="button-row">
                   <button
                     className="small"
@@ -2234,6 +2319,7 @@ function App() {
                       </article>
                     ))
                   )}
+                </div>
                 </div>
               </section>
             </div>

@@ -88,7 +88,7 @@
 .series-card,
 .detail-panel,
 .modal,
-.panel-stack > section {
+.panel-section {
   position: relative;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -98,7 +98,7 @@
 .card,
 .catalog-panel,
 .detail-panel,
-.panel-stack > section {
+.panel-section {
   border-radius: 22px;
   padding: 18px;
 }
@@ -183,8 +183,16 @@
   align-self: start;
 }
 
-.panel-stack > section {
+.panel-section {
   background: var(--surface-soft);
+}
+
+.panel-section.collapsed {
+  padding-bottom: 16px;
+}
+
+.panel-section.collapsed .panel-content {
+  display: none;
 }
 
 .section-header {
@@ -200,6 +208,23 @@
 
 .section-header.compact {
   align-items: flex-start;
+}
+
+.section-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.collapse-toggle {
+  border-radius: 999px;
+  padding: 7px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(7, 13, 23, 0.76);
+  color: var(--muted);
+  font-size: 0.84rem;
 }
 
 .section-label,
