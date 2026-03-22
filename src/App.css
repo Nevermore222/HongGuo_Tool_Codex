@@ -1036,6 +1036,20 @@ button:disabled {
   background: #020617;
 }
 
+@media (max-width: 1480px) {
+  .workspace {
+    grid-template-columns: 240px minmax(0, 1fr) minmax(340px, 0.9fr);
+  }
+
+  .bottom-grid {
+    grid-template-columns: minmax(0, 1fr) minmax(360px, 0.92fr);
+  }
+
+  .hero-panel {
+    grid-template-columns: minmax(0, 1.08fr) minmax(320px, 0.92fr);
+  }
+}
+
 @media (max-width: 1320px) {
   .workspace,
   .bottom-grid,
@@ -1070,10 +1084,73 @@ button:disabled {
   }
 }
 
+@media (max-width: 1080px) {
+  .shell {
+    width: min(100vw - 24px, 100%);
+  }
+
+  .topbar {
+    align-items: stretch;
+  }
+
+  .topbar-actions,
+  .section-actions,
+  .inline-actions {
+    justify-content: flex-start;
+  }
+
+  .hero-panel {
+    gap: 14px;
+  }
+
+  .hero-metrics,
+  .info-grid,
+  .stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .detail-head {
+    grid-template-columns: 84px minmax(0, 1fr);
+  }
+
+  .detail-poster {
+    min-height: 116px;
+  }
+
+  .queue-panel > .button-row,
+  .queue-panel > .queue-tools,
+  .panel-content > .button-row,
+  .panel-content > .queue-tools {
+    padding: 10px 12px;
+  }
+}
+
 @media (max-width: 980px) {
   .hero-metrics,
   .info-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .topbar-actions {
+    width: 100%;
+  }
+
+  .queue-head,
+  .log-head,
+  .stats-row,
+  .section-header {
+    display: grid;
+    gap: 8px;
+  }
+
+  .button-row > .pill:last-child {
+    margin-left: 0;
+  }
+
+  .filter-row {
+    flex-wrap: nowrap;
+    margin: 0 -2px;
+    padding: 0 2px 2px;
   }
 }
 
@@ -1093,6 +1170,14 @@ button:disabled {
     max-width: none;
   }
 
+  .topbar-title,
+  .hero-copy,
+  .metric-card,
+  .sidebar .card,
+  .panel-section {
+    gap: 6px;
+  }
+
   .topbar-actions {
     justify-content: flex-start;
   }
@@ -1110,10 +1195,101 @@ button:disabled {
   .log-head,
   .stats-row {
     display: grid;
+    gap: 8px;
   }
 
   .queue-foot {
     display: grid;
     gap: 6px;
+  }
+
+  .episode-actions,
+  .detail-actions,
+  .button-row,
+  .inline-actions {
+    width: 100%;
+  }
+
+  .episode-actions > *,
+  .detail-actions > *,
+  .button-row > button,
+  .inline-actions > button {
+    flex: 1 1 0;
+    justify-content: center;
+  }
+
+  .category,
+  .filter-chip,
+  .resolution,
+  .primary,
+  .secondary,
+  .small {
+    min-height: 38px;
+  }
+
+  .modal-backdrop {
+    padding: 12px;
+  }
+
+  .modal {
+    width: 100%;
+    max-height: 92vh;
+    padding: 18px;
+    border-radius: 20px;
+  }
+
+  .modal .section-header {
+    margin: -18px -18px 0;
+    padding: 14px 18px 12px;
+  }
+}
+
+@media (max-width: 560px) {
+  .shell {
+    width: min(100vw - 16px, 100%);
+    gap: 12px;
+    padding: 10px 0 16px;
+  }
+
+  .topbar,
+  .hero-panel,
+  .sidebar,
+  .card,
+  .catalog-panel,
+  .detail-panel,
+  .queue-panel,
+  .panel-section,
+  .import-panel {
+    padding: 12px;
+    border-radius: 18px;
+  }
+
+  .hero-metrics,
+  .info-grid,
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-head,
+  .series-card {
+    grid-template-columns: 1fr;
+  }
+
+  .poster,
+  .detail-poster {
+    min-height: 120px;
+  }
+
+  .queue-panel > .button-row,
+  .queue-panel > .queue-tools,
+  .panel-content > .button-row,
+  .panel-content > .queue-tools {
+    padding: 10px;
+  }
+
+  .search-input,
+  .field input,
+  .field textarea {
+    padding: 11px 12px;
   }
 }
