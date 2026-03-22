@@ -2,7 +2,7 @@
   font-family:
     'Avenir Next', 'SF Pro Display', 'PingFang SC', 'Hiragino Sans GB',
     'Microsoft YaHei', sans-serif;
-  line-height: 1.5;
+  line-height: 1.45;
   font-weight: 400;
   color: #d7dee8;
   background:
@@ -18,8 +18,8 @@
   --surface-soft: rgba(15, 23, 42, 0.72);
   --surface-strong: rgba(7, 15, 27, 0.94);
   --surface-elevated: rgba(18, 28, 45, 0.92);
-  --border: rgba(148, 163, 184, 0.14);
-  --border-strong: rgba(148, 163, 184, 0.24);
+  --border: rgba(148, 163, 184, 0.12);
+  --border-strong: rgba(148, 163, 184, 0.2);
   --accent: #38bdf8;
   --accent-strong: #0ea5e9;
   --accent-soft: rgba(56, 189, 248, 0.16);
@@ -78,26 +78,26 @@ h4 {
 }
 
 h1 {
-  font-size: clamp(2.2rem, 3vw, 3.4rem);
+  font-size: clamp(2rem, 2.7vw, 3rem);
 }
 
 h2 {
-  font-size: clamp(1.5rem, 2vw, 2.1rem);
+  font-size: clamp(1.35rem, 1.8vw, 1.95rem);
 }
 
 h3 {
-  font-size: 1.15rem;
+  font-size: 1.05rem;
 }
 
 h4 {
-  font-size: 1rem;
+  font-size: 0.96rem;
 }
 
 .eyebrow {
-  margin-bottom: 10px;
+  margin-bottom: 8px;
   text-transform: uppercase;
   letter-spacing: 0.18em;
-  font-size: 0.72rem;
+  font-size: 0.68rem;
   font-weight: 600;
   color: #67e8f9;
 }
