@@ -516,10 +516,19 @@
   grid-template-columns: 96px minmax(0, 1fr);
   gap: 14px;
   align-items: start;
+  padding: 12px;
+  border-radius: 18px;
+  background: rgba(9, 16, 27, 0.52);
+  border: 1px solid rgba(148, 163, 184, 0.1);
 }
 
 .detail-poster {
   min-height: 132px;
+}
+
+.detail-head > div:last-child {
+  display: grid;
+  gap: 8px;
 }
 
 .detail-head h3 {
@@ -528,6 +537,40 @@
 
 .detail-copy {
   font-size: 0.92rem;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+.detail-actions {
+  padding: 10px 12px;
+  border-radius: 16px;
+  background: rgba(9, 16, 27, 0.46);
+  border: 1px solid rgba(148, 163, 184, 0.1);
+}
+
+.tag-row {
+  gap: 6px;
+}
+
+.tag {
+  padding: 5px 9px;
+  font-size: 0.78rem;
+}
+
+.source-note {
+  padding: 12px 14px;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.detail-panel > .empty-state {
+  min-height: 220px;
+  display: grid;
+  place-items: center;
+  text-align: center;
 }
 
 .series-card p,
@@ -637,6 +680,10 @@ button:disabled {
   align-items: center;
 }
 
+.episode-actions {
+  gap: 8px;
+}
+
 .episode-row strong,
 .queue-head strong,
 .log-head strong {
@@ -654,6 +701,7 @@ button:disabled {
 
 .episode-meta span {
   font-size: 0.84rem;
+  color: var(--muted);
 }
 
 .progress-track {
