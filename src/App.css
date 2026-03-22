@@ -225,6 +225,18 @@
   min-height: 0;
 }
 
+.queue-panel,
+.import-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.catalog-panel,
+.queue-panel {
+  max-height: calc(100vh - 36px);
+  overflow: hidden;
+}
+
 .detail-panel {
   position: sticky;
   top: 18px;
@@ -232,8 +244,21 @@
   overflow: auto;
 }
 
+.import-panel {
+  position: sticky;
+  top: 18px;
+  max-height: calc(100vh - 36px);
+  overflow: auto;
+  align-self: start;
+}
+
 .panel-section {
+  padding: 16px;
+  border-radius: 20px;
   background: var(--surface-soft);
+  background:
+    linear-gradient(180deg, rgba(18, 28, 45, 0.62), rgba(13, 22, 35, 0.78)),
+    var(--surface-soft);
 }
 
 .panel-section.collapsed {
@@ -247,6 +272,13 @@
 .section-header {
   justify-content: space-between;
   align-items: center;
+}
+
+.queue-panel > .section-header,
+.panel-section > .section-header,
+.catalog-panel > .panel-header {
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.1);
 }
 
 .panel-header,
@@ -327,12 +359,25 @@
   resize: vertical;
 }
 
+.panel-content {
+  display: grid;
+  gap: 14px;
+}
+
 .catalog-list,
 .queue-list,
 .log-list {
   max-height: 680px;
   overflow: auto;
   padding-right: 4px;
+  scrollbar-gutter: stable;
+}
+
+.episode-list {
+  max-height: 520px;
+  overflow: auto;
+  padding-right: 4px;
+  scrollbar-gutter: stable;
 }
 
 .category,
@@ -583,6 +628,17 @@ button:disabled {
   margin-top: 10px;
 }
 
+.queue-panel > .button-row,
+.queue-panel > .queue-tools,
+.panel-content > .button-row,
+.panel-content > .queue-tools {
+  margin-top: 0;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.1);
+  background: rgba(9, 16, 27, 0.5);
+}
+
 .inline-actions {
   margin-top: 0;
   justify-content: flex-end;
@@ -703,6 +759,17 @@ button:disabled {
     position: static;
     max-height: none;
     overflow: visible;
+  }
+
+  .catalog-panel,
+  .queue-panel,
+  .import-panel {
+    max-height: none;
+    overflow: visible;
+  }
+
+  .import-panel {
+    position: static;
   }
 
   .hero-metrics {
