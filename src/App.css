@@ -380,6 +380,7 @@
 .log-list {
   max-height: 680px;
   overflow: auto;
+  gap: 10px;
   padding-right: 4px;
   scrollbar-gutter: stable;
 }
@@ -387,6 +388,7 @@
 .episode-list {
   max-height: 520px;
   overflow: auto;
+  gap: 10px;
   padding-right: 4px;
   scrollbar-gutter: stable;
 }
@@ -442,15 +444,26 @@
 
 .series-card {
   display: grid;
-  grid-template-columns: 88px minmax(0, 1fr);
-  gap: 14px;
-  padding: 14px;
-  border-radius: 18px;
+  grid-template-columns: 74px minmax(0, 1fr);
+  gap: 12px;
+  padding: 12px;
+  border-radius: 16px;
   text-align: left;
   transition:
     transform 160ms ease,
     border-color 160ms ease,
     background 160ms ease;
+}
+
+.series-body {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.series-row h4 {
+  font-size: 0.98rem;
+  line-height: 1.2;
 }
 
 .series-card:hover {
@@ -466,18 +479,44 @@
 }
 
 .poster {
-  min-height: 112px;
+  min-height: 98px;
 }
 
 .detail-head {
   display: grid;
-  grid-template-columns: 108px minmax(0, 1fr);
-  gap: 18px;
+  grid-template-columns: 96px minmax(0, 1fr);
+  gap: 14px;
   align-items: start;
 }
 
 .detail-poster {
-  min-height: 146px;
+  min-height: 132px;
+}
+
+.detail-head h3 {
+  font-size: 1.08rem;
+}
+
+.detail-copy {
+  font-size: 0.92rem;
+}
+
+.series-card p,
+.log-head p,
+.queue-head p {
+  font-size: 0.88rem;
+  line-height: 1.4;
+}
+
+.series-card p {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.series-meta {
+  font-size: 0.84rem;
 }
 
 .status-tag,
@@ -558,8 +597,8 @@ button:disabled {
 .episode-row,
 .queue-row,
 .log-row {
-  padding: 14px;
-  border-radius: 18px;
+  padding: 12px;
+  border-radius: 16px;
   border: 1px solid rgba(148, 163, 184, 0.1);
 }
 
@@ -569,16 +608,28 @@ button:disabled {
   align-items: center;
 }
 
+.episode-row strong,
+.queue-head strong,
+.log-head strong {
+  font-size: 0.96rem;
+  line-height: 1.25;
+}
+
 .episode-meta {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
   align-items: center;
+  min-width: 0;
+}
+
+.episode-meta span {
+  font-size: 0.84rem;
 }
 
 .progress-track {
-  margin-top: 10px;
-  height: 8px;
+  margin-top: 8px;
+  height: 6px;
   border-radius: 999px;
   background: rgba(51, 65, 85, 0.55);
   overflow: hidden;
@@ -592,19 +643,19 @@ button:disabled {
 
 .queue-foot {
   justify-content: space-between;
-  margin-top: 10px;
-  font-size: 0.88rem;
+  margin-top: 8px;
+  font-size: 0.84rem;
 }
 
 .queue-path {
-  margin-top: 10px;
+  margin-top: 8px;
   color: var(--muted);
-  font-size: 0.84rem;
+  font-size: 0.8rem;
   line-break: anywhere;
 }
 
 .queue-actions {
-  margin-top: 10px;
+  margin-top: 8px;
 }
 
 .log-head {
@@ -613,8 +664,10 @@ button:disabled {
 }
 
 .log-message {
-  margin-top: 10px;
+  margin-top: 8px;
   color: var(--text-strong);
+  font-size: 0.9rem;
+  line-height: 1.45;
 }
 
 .log-pill[data-level='警告'] {
