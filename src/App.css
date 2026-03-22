@@ -7,13 +7,14 @@
 }
 
 .banner {
-  padding: 14px 18px;
-  border-radius: 18px;
+  padding: 12px 16px;
+  border-radius: 16px;
   border: 1px solid rgba(56, 189, 248, 0.22);
   background:
-    linear-gradient(90deg, rgba(56, 189, 248, 0.16), transparent 32%),
+    linear-gradient(90deg, rgba(56, 189, 248, 0.12), transparent 32%),
     rgba(8, 17, 30, 0.82);
   color: #dff7ff;
+  font-size: 0.92rem;
 }
 
 .topbar,
@@ -44,6 +45,14 @@
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: start;
   gap: 18px;
+  padding: 16px 18px;
+  border-radius: 20px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  background:
+    linear-gradient(180deg, rgba(13, 22, 34, 0.82), rgba(9, 16, 27, 0.7)),
+    var(--surface-soft);
+  box-shadow: 0 18px 40px rgba(2, 8, 20, 0.18);
+  backdrop-filter: blur(18px);
 }
 
 .topbar-title {
@@ -53,8 +62,8 @@
 
 .topbar-title h1 {
   max-width: 9ch;
-  font-size: clamp(2.1rem, 3vw, 3rem);
-  line-height: 0.98;
+  font-size: clamp(1.85rem, 2.4vw, 2.55rem);
+  line-height: 1;
 }
 
 .topbar-actions,
@@ -117,11 +126,12 @@
 }
 
 .hero-panel {
-  grid-template-columns: minmax(0, 1fr);
-  gap: 18px;
-  padding: 24px 26px;
+  grid-template-columns: minmax(0, 1.22fr) minmax(360px, 0.88fr);
+  gap: 22px;
+  padding: 22px 24px;
   border-radius: 24px;
   overflow: hidden;
+  align-items: stretch;
 }
 
 .hero-panel::before {
@@ -145,33 +155,34 @@
 
 .hero-copy {
   display: grid;
-  gap: 10px;
-  max-width: 900px;
+  align-content: center;
+  gap: 8px;
+  max-width: 760px;
 }
 
 .hero-copy h2 {
-  max-width: 18ch;
-  font-size: clamp(1.55rem, 2.1vw, 2.35rem);
-  line-height: 1.08;
+  max-width: 16ch;
+  font-size: clamp(1.35rem, 1.8vw, 1.95rem);
+  line-height: 1.1;
 }
 
 .hero-copy p {
-  max-width: 820px;
+  max-width: 70ch;
   color: var(--muted);
-  font-size: 0.96rem;
+  font-size: 0.92rem;
 }
 
 .hero-metrics {
-  align-content: start;
+  align-content: stretch;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
-  margin-top: 2px;
+  margin-top: 0;
 }
 
 .metric-card {
   min-width: 0;
-  min-height: 118px;
-  padding: 18px;
+  min-height: 0;
+  padding: 16px;
   border-radius: 18px;
   background:
     linear-gradient(180deg, rgba(14, 24, 39, 0.96), rgba(10, 18, 32, 0.82)),
@@ -187,8 +198,8 @@
 
 .metric-card strong {
   display: block;
-  margin-top: 14px;
-  font-size: clamp(1.55rem, 2vw, 2.1rem);
+  margin-top: 10px;
+  font-size: clamp(1.4rem, 1.8vw, 1.95rem);
   color: var(--text-strong);
 }
 
@@ -747,6 +758,7 @@ button:disabled {
 @media (max-width: 1320px) {
   .workspace,
   .bottom-grid,
+  .hero-panel,
   .topbar {
     grid-template-columns: 1fr;
   }
@@ -790,9 +802,18 @@ button:disabled {
     padding: 14px 0 20px;
   }
 
+  .topbar,
+  .hero-panel {
+    padding: 16px;
+  }
+
   .topbar-title h1,
   .hero-copy h2 {
     max-width: none;
+  }
+
+  .topbar-actions {
+    justify-content: flex-start;
   }
 
   .hero-metrics,
