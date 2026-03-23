@@ -1,4 +1,4 @@
-import { useDeferredValue, useEffect, useMemo, useState, startTransition } from 'react'
+﻿import { useDeferredValue, useEffect, useMemo, useState, startTransition } from 'react'
 import './App.css'
 import {
   fallbackDesktopContext,
@@ -29,6 +29,9 @@ import type {
   DesktopDownloadTask,
   DesktopDownloadRecoverySummary,
   DesktopSettings,
+  ShortDramaImportBatchEntry,
+  ShortDramaImportSummary,
+  ShortDramaTableSnapshot,
 } from './desktop'
 import type { DiscoveredSeriesRecord } from './discoveredSources'
 import type { ManualSourceRecord } from './sourceAdapters'
@@ -56,6 +59,13 @@ type DiscoveryEndpointConfig = {
 }
 
 type PanelKey = 'desktop' | 'stats' | 'discovery' | 'manual' | 'logs'
+type ShortDramaTableRow = {
+  dramaCode: string
+  title: string
+  quarkUrl: string
+  baiduUrl: string
+  updatedAt: string
+}
 
 const queueStorageKey = 'hongguo-tool-framework-queue'
 const manualStorageKey = 'hongguo-tool-framework-manual'
@@ -66,6 +76,8 @@ const discoverySourcesKey = 'hongguo-tool-framework-discovery-sources'
 const discoveryHistoryKey = 'hongguo-tool-framework-discovery-history'
 const previewVideoUrl =
   'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4'
+const shortDramaAdapterId = 'short-drama-library'
+const shortDramaTablePageSize = 500
 
 const defaultManualForm: ManualSourceForm = {
   title: '',
@@ -199,6 +211,34 @@ const formatBytes = (bytes: number) => {
   return `${size.toFixed(size >= 10 || index === 0 ? 0 : 1)} ${units[index]}`
 }
 
+const parseShortDramaCode = (title: string) => {
+  const matched = /^(\d{3,})\s*[-—－]/.exec(String(title || '').trim())
+  return matched?.[1] ?? ''
+}
+
+const parseShortDramaLinks = (sourceNote: string) => {
+  const lines = String(sourceNote || '').split(/\r?\n/)
+  let quarkUrl = ''
+  let baiduUrl = ''
+
+  for (const line of lines) {
+    const value = line.trim()
+    if (!value) {
+      continue
+    }
+    if (!quarkUrl && value.includes('夸克') && /https?:\/\//i.test(value)) {
+      const match = /(https?:\/\/\S+)/i.exec(value)
+      quarkUrl = match?.[1] ?? ''
+    }
+    if (!baiduUrl && value.includes('百度') && /https?:\/\//i.test(value)) {
+      const match = /(https?:\/\/\S+)/i.exec(value)
+      baiduUrl = match?.[1] ?? ''
+    }
+  }
+
+  return { quarkUrl, baiduUrl }
+}
+
 const buildRecoveryMessage = (recoverySummary: DesktopDownloadRecoverySummary | null) => {
   if (!recoverySummary || recoverySummary.restored === 0) {
     return ''
@@ -276,6 +316,17 @@ function App() {
   const [discoveryHistory, setDiscoveryHistory] =
     useState<DiscoverySyncHistoryEntry[]>(initialDiscoveryHistory)
   const [discoverySyncing, setDiscoverySyncing] = useState(false)
+  const [shortDramaImporting, setShortDramaImporting] = useState(false)
+  const [shortDramaImportBatches, setShortDramaImportBatches] =
+    useState<ShortDramaImportBatchEntry[]>([])
+  const [shortDramaTableSnapshot, setShortDramaTableSnapshot] =
+    useState<ShortDramaTableSnapshot>({
+      total: 0,
+      limit: shortDramaTablePageSize,
+      offset: 0,
+      rows: [],
+    })
+  const [selectedShortDramaKey, setSelectedShortDramaKey] = useState('')
   const [collapsedPanels, setCollapsedPanels] =
     useState<Record<PanelKey, boolean>>(defaultCollapsedPanels)
   const [browserQueue, setBrowserQueue] = useState<DesktopDownloadTask[]>(() =>
@@ -326,9 +377,14 @@ function App() {
     }
   }, [discoveryHistory])
 
+  const hasShortDramaDataset = shortDramaTableSnapshot.total > 0
+
   const categories = useMemo(
-    () => ['全部', ...new Set(allSeries.map((item) => item.category))],
-    [allSeries],
+    () =>
+      hasShortDramaDataset
+        ? ['全部', '短剧查询导入']
+        : ['全部', ...new Set(allSeries.map((item) => item.category))],
+    [allSeries, hasShortDramaDataset],
   )
 
   const filteredSeries = useMemo(() => {
@@ -345,11 +401,70 @@ function App() {
     })
   }, [activeCategory, allSeries, deferredSearch])
 
+  const cardSeries = useMemo(
+    () =>
+      hasShortDramaDataset
+        ? []
+        : filteredSeries.filter((item) => item.adapterId !== shortDramaAdapterId),
+    [filteredSeries, hasShortDramaDataset],
+  )
+
+  const shortDramaTableRows = useMemo<ShortDramaTableRow[]>(
+    () =>
+      shortDramaTableSnapshot.rows.map((item) => ({
+        dramaCode: item.drama_code || parseShortDramaCode(item.drama_name),
+        title: item.drama_name,
+        quarkUrl: item.quark_url,
+        baiduUrl: item.baidu_url,
+        updatedAt: item.updated_at
+          ? new Date(item.updated_at).toLocaleString('zh-CN', { hour12: false })
+          : '',
+      })),
+    [shortDramaTableSnapshot.rows],
+  )
+
+  const filteredShortDramaTableRows = useMemo(() => {
+    if (!hasShortDramaDataset) {
+      return []
+    }
+
+    return shortDramaTableRows.filter((item) => {
+      const searchBucket = `${item.dramaCode} ${item.title}`.toLowerCase()
+      const matchesSearch =
+        deferredSearch.length === 0 || searchBucket.includes(deferredSearch)
+      const matchesCategory =
+        activeCategory === '全部' || activeCategory === '短剧查询导入'
+      return matchesSearch && matchesCategory
+    })
+  }, [activeCategory, deferredSearch, hasShortDramaDataset, shortDramaTableRows])
+
+  const selectedShortDramaRow = useMemo(() => {
+    if (filteredShortDramaTableRows.length === 0) {
+      return null
+    }
+    return (
+      filteredShortDramaTableRows.find(
+        (item) => `${item.dramaCode}-${item.title}` === selectedShortDramaKey,
+      ) || filteredShortDramaTableRows[0]
+    )
+  }, [filteredShortDramaTableRows, selectedShortDramaKey])
+
+  const displayResourceCount = hasShortDramaDataset
+    ? shortDramaTableSnapshot.total
+    : filteredSeries.length
+
   const selectedSeries =
     filteredSeries.find((item) => item.id === selectedSeriesId) ??
     allSeries.find((item) => item.id === selectedSeriesId) ??
     filteredSeries[0] ??
     allSeries[0]
+
+  const selectedShortDramaLinks = useMemo(() => {
+    if (!selectedSeries || selectedSeries.adapterId !== shortDramaAdapterId) {
+      return { quarkUrl: '', baiduUrl: '' }
+    }
+    return parseShortDramaLinks(selectedSeries.sourceNote)
+  }, [selectedSeries])
 
   const visibleQueue = desktopContext.isElectron ? desktopDownloads : browserQueue
   const adapterOptions = useMemo(() => getAdapterOptions(), [])
@@ -420,6 +535,8 @@ function App() {
         recovery,
         cachedDiscovery,
         syncHistory,
+        shortDramaBatches,
+        shortDramaTable,
       ] = await Promise.all([
         window.desktopApi.getContext(),
         window.desktopApi.getSettings(),
@@ -428,6 +545,11 @@ function App() {
         window.desktopApi.getDownloadRecoverySummary(),
         window.desktopApi.getCachedDiscoveryManifest(),
         window.desktopApi.getDiscoverySyncHistory(),
+        window.desktopApi.getShortDramaImportBatches({ limit: 10 }),
+        window.desktopApi.getShortDramaTableRows({
+          limit: shortDramaTablePageSize,
+          offset: 0,
+        }),
       ])
 
       if (disposed) {
@@ -454,6 +576,8 @@ function App() {
         if (cachedDiscovery) {
           setDiscoveryCache(cachedDiscovery)
         }
+        setShortDramaImportBatches(shortDramaBatches)
+        setShortDramaTableSnapshot(shortDramaTable)
         setDiscoveryHistory(syncHistory)
         setActionMessage(buildRecoveryMessage(recovery))
         setDesktopReady(true)
@@ -510,6 +634,20 @@ function App() {
       window.localStorage.setItem(queueStorageKey, JSON.stringify(browserQueue))
     }
   }, [browserQueue, desktopContext.isElectron])
+
+  useEffect(() => {
+    if (filteredShortDramaTableRows.length === 0) {
+      return
+    }
+
+    const exists = filteredShortDramaTableRows.some(
+      (item) => `${item.dramaCode}-${item.title}` === selectedShortDramaKey,
+    )
+    if (!exists) {
+      const first = filteredShortDramaTableRows[0]
+      setSelectedShortDramaKey(`${first.dramaCode}-${first.title}`)
+    }
+  }, [filteredShortDramaTableRows, selectedShortDramaKey])
 
   const maxConcurrentDownloads = Math.max(1, desktopSettings.maxConcurrentDownloads || 1)
 
@@ -708,6 +846,33 @@ function App() {
     })
   }
 
+  const loadShortDramaTableRows = async (offset = 0) => {
+    if (!window.desktopApi || !desktopContext.isElectron) {
+      return
+    }
+
+    const snapshot = await window.desktopApi.getShortDramaTableRows({
+      limit: shortDramaTablePageSize,
+      offset,
+    })
+    startTransition(() => {
+      setShortDramaTableSnapshot(snapshot)
+    })
+  }
+
+  const loadPreviousShortDramaPage = async () => {
+    const nextOffset = Math.max(0, shortDramaTableSnapshot.offset - shortDramaTablePageSize)
+    await loadShortDramaTableRows(nextOffset)
+  }
+
+  const loadNextShortDramaPage = async () => {
+    const nextOffset = shortDramaTableSnapshot.offset + shortDramaTablePageSize
+    if (nextOffset >= shortDramaTableSnapshot.total) {
+      return
+    }
+    await loadShortDramaTableRows(nextOffset)
+  }
+
   const handleResolutionChange = async (resolution: Resolution) => {
     setSelectedResolution(resolution)
 
@@ -741,6 +906,23 @@ function App() {
     }
 
     await window.desktopApi.openPath(desktopSettings.downloadDirectory)
+  }
+
+  const openExternalLink = async (targetUrl: string) => {
+    const url = String(targetUrl || '').trim()
+    if (!url) {
+      return
+    }
+
+    if (desktopContext.isElectron && window.desktopApi) {
+      const result = await window.desktopApi.openPath(url)
+      if (result && result !== '') {
+        setActionMessage('打开链接失败，请检查系统默认浏览器设置。')
+      }
+      return
+    }
+
+    window.open(url, '_blank', 'noopener,noreferrer')
   }
 
   const updateConcurrentDownloads = async (value: number) => {
@@ -929,6 +1111,66 @@ function App() {
         message: error instanceof Error ? error.message : '导入资源库清单失败。',
       })
       setActionMessage(error instanceof Error ? error.message : '导入资源库清单失败。')
+    }
+  }
+
+  const formatShortDramaImportMessage = (summary: ShortDramaImportSummary) =>
+    `Excel imported: ${summary.importedRows} (inserted ${summary.insertedRows}, updated ${summary.updatedRows}, removed ${summary.removedRows}, skipped ${summary.skippedRows})`
+
+  const handleImportShortDramaExcel = async () => {
+    if (!desktopContext.isElectron || !window.desktopApi) {
+      setActionMessage('This feature is only available in desktop mode.')
+      return
+    }
+
+    try {
+      setShortDramaImporting(true)
+      const summary = await window.desktopApi.importShortDramaExcel()
+      if (!summary) {
+        return
+      }
+
+      startTransition(() => {
+        setActiveCategory('全部')
+        setSearchTerm('')
+      })
+
+      await appendDiscoveryHistory({
+        sourceName: 'Short drama Excel import',
+        endpointUrl: summary.filePath,
+        mode: 'file',
+        status: '成功',
+        itemCount: summary.importedRows,
+        message: formatShortDramaImportMessage(summary),
+      })
+
+      setActionMessage(
+        `${formatShortDramaImportMessage(summary)} | DB: ${summary.databasePath}`,
+      )
+
+      const latestBatches = await window.desktopApi.getShortDramaImportBatches({
+        limit: 10,
+      })
+      const latestTable = await window.desktopApi.getShortDramaTableRows({
+        limit: shortDramaTablePageSize,
+        offset: 0,
+      })
+      startTransition(() => {
+        setShortDramaImportBatches(latestBatches)
+        setShortDramaTableSnapshot(latestTable)
+      })
+    } catch (error) {
+      await appendDiscoveryHistory({
+        sourceName: 'Short drama Excel import',
+        endpointUrl: 'local-excel',
+        mode: 'file',
+        status: '失败',
+        itemCount: 0,
+        message: error instanceof Error ? error.message : 'Excel import failed.',
+      })
+      setActionMessage(error instanceof Error ? error.message : 'Excel import failed.')
+    } finally {
+      setShortDramaImporting(false)
     }
   }
 
@@ -1409,7 +1651,7 @@ function App() {
           <div className="hero-metrics">
             <div className="metric-card">
               <span>资源条目</span>
-              <strong>{allSeries.length}</strong>
+              <strong>{displayResourceCount}</strong>
             </div>
             <div className="metric-card">
               <span>任务队列</span>
@@ -1424,7 +1666,7 @@ function App() {
 
         {actionMessage ? <div className="banner">{actionMessage}</div> : null}
 
-        <section className="workspace">
+        <section className={hasShortDramaDataset ? 'workspace short-drama-mode' : 'workspace'}>
           <aside className="sidebar">
             <div className="card">
               <label className="section-label" htmlFor="search">
@@ -1442,7 +1684,7 @@ function App() {
             <div className="card">
               <div className="section-header">
                 <span className="section-label">分类浏览</span>
-                <span className="section-meta">{filteredSeries.length} 条</span>
+                <span className="section-meta">{displayResourceCount} 条</span>
               </div>
               <div className="category-list">
                 {categories.map((category) => (
@@ -1473,58 +1715,243 @@ function App() {
             <div className="panel-header">
               <div>
                 <p className="eyebrow">资源库</p>
-                <h3>短剧列表</h3>
+                <h3>{hasShortDramaDataset ? '短剧查询总表' : '短剧列表'}</h3>
               </div>
-              <div className="resolution-switch">
-                {(['1080p', '720p'] as Resolution[]).map((resolution) => (
-                  <button
-                    key={resolution}
-                    className={
-                      resolution === selectedResolution
-                        ? 'resolution active'
-                        : 'resolution'
-                    }
-                    onClick={() => void handleResolutionChange(resolution)}
-                  >
-                    {resolution}
-                  </button>
-                ))}
-              </div>
+              {hasShortDramaDataset ? (
+                <span className="pill">数据来源：短剧查询 Excel 模板</span>
+              ) : (
+                <div className="resolution-switch">
+                  {(['1080p', '720p'] as Resolution[]).map((resolution) => (
+                    <button
+                      key={resolution}
+                      className={
+                        resolution === selectedResolution
+                          ? 'resolution active'
+                          : 'resolution'
+                      }
+                      onClick={() => void handleResolutionChange(resolution)}
+                    >
+                      {resolution}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
-            <div className="catalog-list">
-              {filteredSeries.map((series) => (
-                <button
-                  key={series.id}
-                  className={
-                    selectedSeries?.id === series.id ? 'series-card active' : 'series-card'
-                  }
-                  onClick={() => setSelectedSeriesId(series.id)}
-                >
-                  <div
-                    className="poster"
-                    style={{ backgroundImage: series.posterGradient }}
-                    aria-hidden="true"
-                  />
-                  <div className="series-body">
-                    <div className="series-row">
-                      <h4>{series.title}</h4>
-                      <span className="status-tag">{series.status}</span>
-                    </div>
-                    <p>{series.description}</p>
-                    <div className="series-meta">
-                      <span>{series.category}</span>
-                      <span>{series.totalEpisodes} 集</span>
-                      <span>{series.adapterId}</span>
-                    </div>
+            {!hasShortDramaDataset ? (
+              <div className="catalog-list">
+                {cardSeries.length === 0 ? (
+                  <div className="empty-state">当前筛选条件下没有卡片资源。</div>
+                ) : (
+                  cardSeries.map((series) => (
+                    <button
+                      key={series.id}
+                      className={
+                        selectedSeries?.id === series.id ? 'series-card active' : 'series-card'
+                      }
+                      onClick={() => setSelectedSeriesId(series.id)}
+                    >
+                      <div
+                        className="poster"
+                        style={{ backgroundImage: series.posterGradient }}
+                        aria-hidden="true"
+                      />
+                      <div className="series-body">
+                        <div className="series-row">
+                          <h4>{series.title}</h4>
+                          <span className="status-tag">{series.status}</span>
+                        </div>
+                        <p>{series.description}</p>
+                        <div className="series-meta">
+                          <span>{series.category}</span>
+                          <span>{series.totalEpisodes} 集</span>
+                          <span>{series.adapterId}</span>
+                        </div>
+                      </div>
+                    </button>
+                  ))
+                )}
+              </div>
+            ) : null}
+
+            {desktopContext.isElectron ? (
+              <div className="short-drama-table-panel">
+                <div className="section-header compact">
+                  <div>
+                    <p className="eyebrow">短剧查询模板</p>
+                    <h4>表格视图</h4>
                   </div>
-                </button>
-              ))}
-            </div>
+                  <div className="button-row">
+                    <span className="pill">
+                      当前页 {filteredShortDramaTableRows.length} /{' '}
+                      {shortDramaTableSnapshot.total}
+                    </span>
+                    <button
+                      className="small ghost"
+                      onClick={() => void loadPreviousShortDramaPage()}
+                      disabled={shortDramaTableSnapshot.offset <= 0}
+                    >
+                      上一页
+                    </button>
+                    <button
+                      className="small ghost"
+                      onClick={() => void loadNextShortDramaPage()}
+                      disabled={
+                        shortDramaTableSnapshot.offset + shortDramaTableSnapshot.limit >=
+                        shortDramaTableSnapshot.total
+                      }
+                    >
+                      下一页
+                    </button>
+                    <button
+                      className="small ghost"
+                      onClick={() => void loadShortDramaTableRows(shortDramaTableSnapshot.offset)}
+                    >
+                      刷新
+                    </button>
+                  </div>
+                </div>
+                <div className="short-drama-table-wrap">
+                  {filteredShortDramaTableRows.length === 0 ? (
+                    <div className="empty-state">暂无表格数据，先执行一次 Excel 导入。</div>
+                  ) : (
+                    <table className="short-drama-table">
+                      <thead>
+                        <tr>
+                          <th>编号</th>
+                          <th>短剧名称</th>
+                          <th>夸克</th>
+                          <th>百度</th>
+                          <th>更新时间</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredShortDramaTableRows.map((row) => (
+                          <tr
+                            key={`${row.dramaCode}-${row.title}`}
+                            className={
+                              selectedShortDramaRow &&
+                              selectedShortDramaRow.dramaCode === row.dramaCode &&
+                              selectedShortDramaRow.title === row.title
+                                ? 'active'
+                                : ''
+                            }
+                            onClick={() =>
+                              setSelectedShortDramaKey(`${row.dramaCode}-${row.title}`)
+                            }
+                          >
+                            <td>{row.dramaCode || '-'}</td>
+                            <td title={row.title}>{row.title}</td>
+                            <td>
+                              {row.quarkUrl ? (
+                                <button
+                                  className="small"
+                                  onClick={(event) => {
+                                    event.stopPropagation()
+                                    void openExternalLink(row.quarkUrl)
+                                  }}
+                                >
+                                  打开
+                                </button>
+                              ) : (
+                                <span className="section-meta">-</span>
+                              )}
+                            </td>
+                            <td>
+                              {row.baiduUrl ? (
+                                <button
+                                  className="small"
+                                  onClick={(event) => {
+                                    event.stopPropagation()
+                                    void openExternalLink(row.baiduUrl)
+                                  }}
+                                >
+                                  打开
+                                </button>
+                              ) : (
+                                <span className="section-meta">-</span>
+                              )}
+                            </td>
+                            <td>{row.updatedAt}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+            ) : null}
           </main>
 
           <section className="detail-panel">
-            {selectedSeries ? (
+            {hasShortDramaDataset ? (
+              selectedShortDramaRow ? (
+                <>
+                  <div className="detail-head short-drama-detail-head">
+                    <div
+                      className="detail-poster"
+                      style={{ backgroundImage: 'linear-gradient(160deg, #1f2937 0%, #0f766e 100%)' }}
+                    />
+                    <div>
+                      <p className="eyebrow">短剧查询导入</p>
+                      <h3>{selectedShortDramaRow.title}</h3>
+                      <p className="detail-copy">
+                        编号 {selectedShortDramaRow.dramaCode || '-'}，更新时间{' '}
+                        {selectedShortDramaRow.updatedAt || '-'}
+                      </p>
+                      <div className="tag-row">
+                        <span className="tag">Excel导入</span>
+                        <span className="tag">短剧查询</span>
+                        {selectedShortDramaRow.quarkUrl ? <span className="tag">夸克网盘</span> : null}
+                        {selectedShortDramaRow.baiduUrl ? <span className="tag">百度网盘</span> : null}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="detail-actions">
+                    <button
+                      className="primary"
+                      onClick={() => void openExternalLink(selectedShortDramaRow.quarkUrl)}
+                      disabled={!selectedShortDramaRow.quarkUrl}
+                    >
+                      打开夸克网盘
+                    </button>
+                    <button
+                      className="secondary"
+                      onClick={() => void openExternalLink(selectedShortDramaRow.baiduUrl)}
+                      disabled={!selectedShortDramaRow.baiduUrl}
+                    >
+                      打开百度网盘
+                    </button>
+                  </div>
+
+                  <div className="source-note">
+                    夸克网盘：{selectedShortDramaRow.quarkUrl || '-'}
+                    <br />
+                    百度网盘：{selectedShortDramaRow.baiduUrl || '-'}
+                  </div>
+
+                  <div className="short-drama-detail-grid">
+                    <article className="episode-row">
+                      <div className="episode-meta">
+                        <strong>快速定位</strong>
+                        <span>将该剧名填入左侧搜索框，定位到相关记录</span>
+                      </div>
+                      <div className="episode-actions">
+                        <button
+                          className="small ghost"
+                          onClick={() => setSearchTerm(selectedShortDramaRow.title)}
+                        >
+                          填入搜索
+                        </button>
+                      </div>
+                    </article>
+                  </div>
+                </>
+              ) : (
+                <div className="empty-state">暂无选中条目。</div>
+              )
+            ) : selectedSeries ? (
               <>
                 <div className="detail-head">
                   <div
@@ -1547,9 +1974,31 @@ function App() {
                 </div>
 
                 <div className="detail-actions">
-                  <button className="primary" onClick={() => void enqueueEpisodes(selectedSeries.episodes)}>
-                    全部加入队列
-                  </button>
+                  {selectedSeries.adapterId === shortDramaAdapterId ? (
+                    <>
+                      <button
+                        className="primary"
+                        onClick={() => void openExternalLink(selectedShortDramaLinks.quarkUrl)}
+                        disabled={!selectedShortDramaLinks.quarkUrl}
+                      >
+                        打开夸克网盘
+                      </button>
+                      <button
+                        className="secondary"
+                        onClick={() => void openExternalLink(selectedShortDramaLinks.baiduUrl)}
+                        disabled={!selectedShortDramaLinks.baiduUrl}
+                      >
+                        打开百度网盘
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      className="primary"
+                      onClick={() => void enqueueEpisodes(selectedSeries.episodes)}
+                    >
+                      全部加入队列
+                    </button>
+                  )}
                   <button className="secondary" onClick={() => void clearCompleted()}>
                     清空已完成
                   </button>
@@ -1573,12 +2022,30 @@ function App() {
                         >
                           预览
                         </button>
-                        <button
-                          className="small"
-                          onClick={() => void enqueueEpisodes([episode])}
-                        >
-                          下载
-                        </button>
+                        {selectedSeries.adapterId === shortDramaAdapterId ? (
+                          <button
+                            className="small"
+                            onClick={() =>
+                              void openExternalLink(
+                                selectedShortDramaLinks.quarkUrl ||
+                                  selectedShortDramaLinks.baiduUrl,
+                              )
+                            }
+                            disabled={
+                              !selectedShortDramaLinks.quarkUrl &&
+                              !selectedShortDramaLinks.baiduUrl
+                            }
+                          >
+                            打开链接
+                          </button>
+                        ) : (
+                          <button
+                            className="small"
+                            onClick={() => void enqueueEpisodes([episode])}
+                          >
+                            下载
+                          </button>
+                        )}
                       </div>
                     </article>
                   ))}
@@ -1921,6 +2388,13 @@ function App() {
                 </div>
                 <div className="panel-content">
                 <div className="button-row">
+                  <button
+                    className="small"
+                    onClick={() => void handleImportShortDramaExcel()}
+                    disabled={!desktopContext.isElectron || shortDramaImporting}
+                  >
+                    {shortDramaImporting ? '导入中...' : '导入短剧查询 Excel'}
+                  </button>
                   <button className="small" onClick={() => void handleImportDiscoveredSeries()}>
                     导入资源库清单
                   </button>
@@ -1929,6 +2403,18 @@ function App() {
                   </button>
                   <span className="pill">当前 {discoveredSeries.length} 条发现资源</span>
                 </div>
+                {shortDramaImportBatches.length > 0 ? (
+                  <p className="hint">
+                    最近导入：
+                    {new Date(shortDramaImportBatches[0].imported_at).toLocaleString(
+                      'zh-CN',
+                      { hour12: false },
+                    )}
+                    ，新增 {shortDramaImportBatches[0].inserted_rows}，更新{' '}
+                    {shortDramaImportBatches[0].updated_rows}，移除{' '}
+                    {shortDramaImportBatches[0].removed_rows}
+                  </p>
+                ) : null}
 
                 <div className="import-form">
                   <label className="field">
@@ -2351,3 +2837,4 @@ function App() {
 }
 
 export default App
+

@@ -2,6 +2,7 @@ import { mockCatalog } from '../catalog'
 import { buildDiscoveredSeries } from '../discoveredSources'
 import { demoLibraryAdapter } from './builtins/demoLibrary'
 import { manualTemplateAdapter } from './builtins/manualTemplate'
+import { shortDramaLibraryAdapter } from './builtins/shortDramaLibrary'
 import { customAdapters } from './custom'
 import { buildManualSeries } from './utils'
 import type { ManualSourceRecord, AdapterResolveInput, AdapterDefinition } from './types'
@@ -10,6 +11,7 @@ import type { DiscoveredSeriesRecord } from '../discoveredSources'
 const builtInAdapters: AdapterDefinition[] = [
   demoLibraryAdapter,
   manualTemplateAdapter,
+  shortDramaLibraryAdapter,
 ]
 
 export const adapterRegistry: Record<string, AdapterDefinition> = Object.fromEntries(

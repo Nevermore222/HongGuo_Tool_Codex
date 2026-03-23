@@ -6,6 +6,12 @@ const https = require('node:https')
 const path = require('node:path')
 const { pipeline } = require('node:stream/promises')
 const { fileURLToPath, URL } = require('node:url')
+const {
+  importShortDramaWorkbook,
+  listShortDramaImportBatches,
+  listShortDramaDiscoveredSeries,
+  listShortDramaTableRows,
+} = require('./shortDramaImport.cjs')
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL)
 const downloadTasks = new Map()
@@ -902,6 +908,46 @@ ipcMain.handle('files:save-text', async (_event, input) => {
   await fsp.writeFile(result.filePath, input.content, 'utf8')
   return result.filePath
 })
+
+ipcMain.handle('short-drama:import-excel', async () => {
+  const result = await dialog.showOpenDialog({
+    title: '选择短剧查询 Excel 文件',
+    filters: [{ name: 'Excel Files', extensions: ['xlsx'] }],
+    properties: ['openFile'],
+  })
+
+  if (result.canceled || result.filePaths.length === 0) {
+    return null
+  }
+
+  const [selectedPath] = result.filePaths
+  return importShortDramaWorkbook({
+    filePath: selectedPath,
+    userDataPath: app.getPath('userData'),
+    syncMode: 'replace',
+  })
+})
+
+ipcMain.handle('short-drama:list-series', async () =>
+  listShortDramaDiscoveredSeries({
+    userDataPath: app.getPath('userData'),
+  }),
+)
+
+ipcMain.handle('short-drama:list-batches', async (_event, input) =>
+  listShortDramaImportBatches({
+    userDataPath: app.getPath('userData'),
+    limit: Number(input?.limit) || 20,
+  }),
+)
+
+ipcMain.handle('short-drama:list-table', async (_event, input) =>
+  listShortDramaTableRows({
+    userDataPath: app.getPath('userData'),
+    limit: Number(input?.limit) || 500,
+    offset: Number(input?.offset) || 0,
+  }),
+)
 
 ipcMain.handle('discovery:fetch-remote', async (_event, input) => {
   const endpointUrl = String(input?.endpointUrl || '').trim()

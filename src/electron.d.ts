@@ -9,7 +9,11 @@ import type {
   DesktopSettings,
   EnqueueDownloadInput,
   OpenTextFileResult,
+  ShortDramaImportBatchEntry,
+  ShortDramaImportSummary,
+  ShortDramaTableSnapshot,
 } from './desktop'
+import type { DiscoveredSeriesRecord } from './discoveredSources'
 
 type DesktopApi = {
   isElectron: boolean
@@ -38,6 +42,15 @@ type DesktopApi = {
     defaultFileName: string
     content: string
   }) => Promise<string | null>
+  importShortDramaExcel: () => Promise<ShortDramaImportSummary | null>
+  getShortDramaDiscoveredSeries: () => Promise<DiscoveredSeriesRecord[]>
+  getShortDramaImportBatches: (input?: {
+    limit?: number
+  }) => Promise<ShortDramaImportBatchEntry[]>
+  getShortDramaTableRows: (input?: {
+    limit?: number
+    offset?: number
+  }) => Promise<ShortDramaTableSnapshot>
   fetchDiscoveryManifest: (
     input: DiscoverySyncInput,
   ) => Promise<DiscoveryCacheSnapshot>

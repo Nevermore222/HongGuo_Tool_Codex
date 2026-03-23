@@ -111,6 +111,49 @@ export type DiscoverySyncHistoryEntry = {
   timestamp: string
 }
 
+export type ShortDramaImportSummary = {
+  filePath: string
+  sheetName: string
+  totalRows: number
+  importedRows: number
+  insertedRows: number
+  updatedRows: number
+  skippedRows: number
+  removedRows: number
+  syncMode: 'replace' | 'merge'
+  databasePath: string
+  seriesCount: number
+}
+
+export type ShortDramaImportBatchEntry = {
+  id: number
+  source_file: string
+  source_sheet: string
+  parsed_rows: number
+  imported_rows: number
+  inserted_rows: number
+  updated_rows: number
+  skipped_rows: number
+  removed_rows: number
+  sync_mode: 'replace' | 'merge'
+  imported_at: string
+}
+
+export type ShortDramaTableEntry = {
+  drama_code: string
+  drama_name: string
+  quark_url: string
+  baidu_url: string
+  updated_at: string
+}
+
+export type ShortDramaTableSnapshot = {
+  total: number
+  limit: number
+  offset: number
+  rows: ShortDramaTableEntry[]
+}
+
 export const fallbackDesktopContext: DesktopContext = {
   isElectron: false,
   platform: 'web',

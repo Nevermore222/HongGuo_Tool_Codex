@@ -226,6 +226,10 @@
   gap: 16px;
 }
 
+.workspace.short-drama-mode {
+  grid-template-columns: 240px minmax(0, 1.28fr) minmax(420px, 0.72fr);
+}
+
 .bottom-grid {
   grid-template-columns: minmax(0, 1.1fr) minmax(400px, 0.9fr);
   align-items: start;
@@ -653,6 +657,78 @@
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
   overflow: hidden;
+}
+
+.short-drama-table-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(8, 16, 28, 0.72);
+}
+
+.short-drama-table-wrap {
+  max-height: 560px;
+  overflow: auto;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  border-radius: 12px;
+}
+
+.short-drama-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.84rem;
+}
+
+.short-drama-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  text-align: left;
+  padding: 10px 12px;
+  background: rgba(13, 22, 35, 0.95);
+  color: var(--muted);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.short-drama-table tbody td {
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+  color: var(--text);
+  vertical-align: middle;
+}
+
+.short-drama-table tbody tr {
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.short-drama-table tbody tr:hover {
+  background: rgba(16, 26, 42, 0.78);
+}
+
+.short-drama-table tbody tr.active {
+  background:
+    linear-gradient(90deg, rgba(56, 189, 248, 0.12), transparent 30%),
+    rgba(16, 26, 42, 0.86);
+}
+
+.short-drama-table td:nth-child(2) {
+  min-width: 380px;
+  max-width: 640px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.short-drama-detail-head {
+  border-color: rgba(56, 189, 248, 0.2);
+}
+
+.short-drama-detail-grid {
+  display: grid;
+  gap: 10px;
 }
 
 .series-meta {
