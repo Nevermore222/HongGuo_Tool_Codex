@@ -154,6 +154,30 @@ export type ShortDramaTableSnapshot = {
   rows: ShortDramaTableEntry[]
 }
 
+export type ShortDramaEpisodeEntry = {
+  drama_code: string
+  drama_title: string
+  episode_index: number
+  episode_title: string
+  quark_file_id: string
+  file_name: string
+  file_size: number
+  preview_url: string
+  download_url: string
+  url_expire_at: string
+  status: 'ready' | 'expired' | 'missing'
+  updated_at: string
+}
+
+export type ShortDramaEpisodeSyncResult = {
+  dramaCode: string
+  dramaTitle: string
+  folderName: string
+  syncedEpisodes: number
+  readyEpisodes: number
+  episodes: ShortDramaEpisodeEntry[]
+}
+
 export const fallbackDesktopContext: DesktopContext = {
   isElectron: false,
   platform: 'web',

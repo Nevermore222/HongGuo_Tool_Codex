@@ -11,6 +11,8 @@ import type {
   OpenTextFileResult,
   ShortDramaImportBatchEntry,
   ShortDramaImportSummary,
+  ShortDramaEpisodeEntry,
+  ShortDramaEpisodeSyncResult,
   ShortDramaTableSnapshot,
 } from './desktop'
 import type { DiscoveredSeriesRecord } from './discoveredSources'
@@ -51,6 +53,18 @@ type DesktopApi = {
     limit?: number
     offset?: number
   }) => Promise<ShortDramaTableSnapshot>
+  saveQuarkCookie: (input: { cookie: string }) => Promise<boolean>
+  syncShortDramaEpisodes: (input: {
+    dramaCode: string
+    dramaTitle: string
+  }) => Promise<ShortDramaEpisodeSyncResult>
+  getShortDramaEpisodes: (input: {
+    dramaCode: string
+  }) => Promise<ShortDramaEpisodeEntry[]>
+  refreshShortDramaEpisodeLink: (input: {
+    dramaCode: string
+    episodeIndex: number
+  }) => Promise<ShortDramaEpisodeEntry>
   fetchDiscoveryManifest: (
     input: DiscoverySyncInput,
   ) => Promise<DiscoveryCacheSnapshot>

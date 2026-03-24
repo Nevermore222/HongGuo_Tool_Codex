@@ -1,6 +1,13 @@
 const path = require('node:path')
 const { DatabaseSync } = require('node:sqlite')
 const yauzl = require('yauzl')
+const {
+  collectFoldersByCode,
+  collectVideosInFolder,
+  extractPreviewUrlFromPlayInfo,
+  fetchDownloadInfoByFids,
+  fetchPlayInfo,
+} = require('./quarkDrive.cjs')
 
 const defaultSheetName = '表格视图'
 const shortDramaCategory = '短剧查询导入'
@@ -502,6 +509,26 @@ const ensureDatabaseSchema = (db) => {
       sync_mode TEXT NOT NULL DEFAULT 'replace',
       imported_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS short_drama_episodes (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      drama_code TEXT NOT NULL,
+      drama_title TEXT NOT NULL DEFAULT '',
+      episode_index INTEGER NOT NULL,
+      episode_title TEXT NOT NULL DEFAULT '',
+      quark_file_id TEXT NOT NULL DEFAULT '',
+      file_name TEXT NOT NULL DEFAULT '',
+      file_size INTEGER NOT NULL DEFAULT 0,
+      preview_url TEXT NOT NULL DEFAULT '',
+      download_url TEXT NOT NULL DEFAULT '',
+      url_expire_at TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'ready',
+      updated_at TEXT NOT NULL,
+      UNIQUE (drama_code, episode_index)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_short_drama_episode_code
+      ON short_drama_episodes (drama_code, episode_index);
   `)
 
   ensureTableColumn(db, 'short_drama_import_batches', 'removed_rows', 'INTEGER NOT NULL DEFAULT 0')
@@ -605,6 +632,39 @@ const listShortDramaImportBatches = ({ userDataPath, limit = 20 }) => {
     `)
 
     return stmt.all(Math.max(1, Number(limit) || 20))
+  } finally {
+    db.close()
+  }
+}
+
+const listShortDramaEpisodes = ({ userDataPath, dramaCode }) => {
+  const code = String(dramaCode || '').trim()
+  if (!code) {
+    return []
+  }
+
+  const db = new DatabaseSync(getShortDramaDbPath(userDataPath))
+  try {
+    ensureDatabaseSchema(db)
+    const stmt = db.prepare(`
+      SELECT
+        drama_code,
+        drama_title,
+        episode_index,
+        episode_title,
+        quark_file_id,
+        file_name,
+        file_size,
+        preview_url,
+        download_url,
+        url_expire_at,
+        status,
+        updated_at
+      FROM short_drama_episodes
+      WHERE drama_code = ?
+      ORDER BY episode_index ASC
+    `)
+    return stmt.all(code)
   } finally {
     db.close()
   }
@@ -792,10 +852,209 @@ const importShortDramaWorkbook = async ({
   }
 }
 
+const syncShortDramaEpisodesFromQuark = async ({
+  userDataPath,
+  dramaCode,
+  dramaTitle,
+}) => {
+  const code = String(dramaCode || '').trim()
+  const title = String(dramaTitle || '').trim()
+  if (!code) {
+    throw new Error('dramaCode 不能为空。')
+  }
+
+  const folders = await collectFoldersByCode({
+    userDataPath,
+    dramaCode: code,
+  })
+
+  if (folders.length === 0) {
+    throw new Error(`未在夸克网盘中找到包含编号 ${code} 的目录。`)
+  }
+
+  const folder = folders[0]
+  const videos = await collectVideosInFolder({
+    userDataPath,
+    folderFid: folder.fid,
+  })
+
+  const normalizedVideos = videos
+    .filter((item) => item.episodeIndex > 0)
+    .sort((a, b) => a.episodeIndex - b.episodeIndex)
+
+  if (normalizedVideos.length === 0) {
+    throw new Error(`目录 ${folder.folderName} 下没有可识别的分集视频文件。`)
+  }
+
+  const fids = normalizedVideos.map((item) => item.fid)
+  const downloadInfos = await fetchDownloadInfoByFids({
+    userDataPath,
+    fids,
+  })
+  const downloadInfoMap = new Map(downloadInfos.map((item) => [String(item.fid || ''), item]))
+
+  const db = new DatabaseSync(getShortDramaDbPath(userDataPath))
+  const now = new Date().toISOString()
+
+  try {
+    ensureDatabaseSchema(db)
+    const upsert = db.prepare(`
+      INSERT INTO short_drama_episodes (
+        drama_code, drama_title, episode_index, episode_title, quark_file_id,
+        file_name, file_size, preview_url, download_url, url_expire_at, status, updated_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(drama_code, episode_index) DO UPDATE SET
+        drama_title = excluded.drama_title,
+        episode_title = excluded.episode_title,
+        quark_file_id = excluded.quark_file_id,
+        file_name = excluded.file_name,
+        file_size = excluded.file_size,
+        preview_url = excluded.preview_url,
+        download_url = excluded.download_url,
+        url_expire_at = excluded.url_expire_at,
+        status = excluded.status,
+        updated_at = excluded.updated_at
+    `)
+
+    db.exec('BEGIN')
+    try {
+      for (const item of normalizedVideos) {
+        const info = downloadInfoMap.get(item.fid) || {}
+        const downloadUrl = String(info.download_url || '')
+        let previewUrl = String(info.preview_url || '')
+        if (!previewUrl) {
+          try {
+            const playInfo = await fetchPlayInfo({ userDataPath, fid: item.fid })
+            previewUrl = extractPreviewUrlFromPlayInfo(playInfo)
+          } catch {}
+        }
+
+        upsert.run(
+          code,
+          title || folder.folderName,
+          item.episodeIndex,
+          `第${item.episodeIndex}集`,
+          item.fid,
+          item.fileName,
+          Number(item.fileSize || 0),
+          previewUrl,
+          downloadUrl,
+          '',
+          downloadUrl ? 'ready' : 'expired',
+          now,
+        )
+      }
+
+      db.exec('COMMIT')
+    } catch (error) {
+      db.exec('ROLLBACK')
+      throw error
+    }
+
+    const episodes = listShortDramaEpisodes({ userDataPath, dramaCode: code })
+    return {
+      dramaCode: code,
+      dramaTitle: title || folder.folderName,
+      folderName: folder.folderName,
+      syncedEpisodes: episodes.length,
+      readyEpisodes: episodes.filter((item) => item.download_url).length,
+      episodes,
+    }
+  } finally {
+    db.close()
+  }
+}
+
+const refreshShortDramaEpisodeLink = async ({ userDataPath, dramaCode, episodeIndex }) => {
+  const code = String(dramaCode || '').trim()
+  const index = Number(episodeIndex)
+  if (!code || !Number.isFinite(index) || index <= 0) {
+    throw new Error('参数不合法。')
+  }
+
+  const db = new DatabaseSync(getShortDramaDbPath(userDataPath))
+  try {
+    ensureDatabaseSchema(db)
+    const row = db
+      .prepare(
+        `
+      SELECT drama_code, drama_title, episode_index, quark_file_id
+      FROM short_drama_episodes
+      WHERE drama_code = ? AND episode_index = ?
+    `,
+      )
+      .get(code, index)
+
+    if (!row || !row.quark_file_id) {
+      throw new Error('未找到对应剧集或缺少 quark_file_id。')
+    }
+
+    const [downloadInfo] = await fetchDownloadInfoByFids({
+      userDataPath,
+      fids: [row.quark_file_id],
+    })
+    const downloadUrl = String(downloadInfo?.download_url || '')
+
+    let previewUrl = String(downloadInfo?.preview_url || '')
+    if (!previewUrl) {
+      try {
+        const playInfo = await fetchPlayInfo({
+          userDataPath,
+          fid: row.quark_file_id,
+        })
+        previewUrl = extractPreviewUrlFromPlayInfo(playInfo)
+      } catch {}
+    }
+
+    db.prepare(
+      `
+      UPDATE short_drama_episodes
+      SET preview_url = ?, download_url = ?, status = ?, updated_at = ?
+      WHERE drama_code = ? AND episode_index = ?
+    `,
+    ).run(
+      previewUrl,
+      downloadUrl,
+      downloadUrl ? 'ready' : 'expired',
+      new Date().toISOString(),
+      code,
+      index,
+    )
+
+    return db
+      .prepare(
+        `
+      SELECT
+        drama_code,
+        drama_title,
+        episode_index,
+        episode_title,
+        quark_file_id,
+        file_name,
+        file_size,
+        preview_url,
+        download_url,
+        url_expire_at,
+        status,
+        updated_at
+      FROM short_drama_episodes
+      WHERE drama_code = ? AND episode_index = ?
+    `,
+      )
+      .get(code, index)
+  } finally {
+    db.close()
+  }
+}
+
 module.exports = {
   getShortDramaDbPath,
   importShortDramaWorkbook,
   listShortDramaDiscoveredSeries,
   listShortDramaImportBatches,
   listShortDramaTableRows,
+  listShortDramaEpisodes,
+  syncShortDramaEpisodesFromQuark,
+  refreshShortDramaEpisodeLink,
 }

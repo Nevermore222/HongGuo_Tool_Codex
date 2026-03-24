@@ -12,6 +12,7 @@
     "dev:electron": "wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .",
     "dev:desktop": "concurrently -k \"npm:dev:web\" \"npm:dev:electron\"",
     "build": "tsc -b && vite build",
+    "quark:export": "node scripts/export_quark_manifest.mjs",
     "build:desktop": "npm run build && electron-builder --dir",
     "dist:win": "npm run build && electron-builder --win nsis",
     "lint": "eslint .",

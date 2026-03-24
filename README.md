@@ -50,6 +50,58 @@ npm run dev:desktop
 - `removedRows`
 - `skippedRows`
 
+## 夸克 Cookie 自动采集字段（本地运行）
+
+你可以用脚本自动导出“已转存文件清单”CSV，再导入下载系统。
+
+脚本：
+- `scripts/export_quark_manifest.mjs`
+
+使用方式（PowerShell）：
+
+```powershell
+$env:QUARK_COOKIE='这里放你自己的完整 Cookie'
+$env:QUARK_ROOT_FID='0'          # 可选，默认 0（网盘根目录）
+$env:QUARK_OUTPUT='D:\quark-manifest.csv'  # 可选，输出路径
+node scripts/export_quark_manifest.mjs
+```
+
+输出字段包含：
+- `drama_code`
+- `drama_title`
+- `episode_index`
+- `file_name`
+- `quark_file_id`
+- `file_size`
+- `pdir_fid`
+- `updated_at`
+- `preview_url`（预留）
+- `download_url`（预留）
+- `url_expire_at`（预留）
+
+安全建议：
+- 不要把 Cookie 发到聊天窗口或提交到 Git。
+- 只在你自己的本机环境变量里临时设置，使用后及时清理。
+- 该脚本仅用于读取你自己账号可访问的文件元数据。
+
+## 已转存短剧：预览与下载（系统内）
+
+当你已把某部短剧转存到自己的夸克网盘后，系统支持：
+- 同步该剧分集（自动识别第1集、第2集...）
+- 生成每集 `preview_url` 与 `download_url`
+- 在详情面板直接 `预览 / 刷新链接 / 下载`
+- 下载任务进入现有下载队列（支持并发、暂停、重试）
+
+操作步骤：
+1. 在“短剧查询总表”选中一部剧（如 `47924`）
+2. 在右侧粘贴并保存夸克 Cookie（仅本机保存到 Electron userData）
+3. 点击“同步本剧分集”
+4. 同步完成后，直接对每一集点击预览或下载
+
+说明：
+- 链接可能过期，点击“刷新链接”可重新获取当前可用地址。
+- 该能力只使用你账号可访问的数据，不处理未授权内容。
+
 ## SQLite 数据库位置
 
 默认路径（Windows）：

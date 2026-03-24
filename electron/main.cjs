@@ -9,9 +9,13 @@ const { fileURLToPath, URL } = require('node:url')
 const {
   importShortDramaWorkbook,
   listShortDramaImportBatches,
+  listShortDramaEpisodes,
   listShortDramaDiscoveredSeries,
   listShortDramaTableRows,
+  refreshShortDramaEpisodeLink,
+  syncShortDramaEpisodesFromQuark,
 } = require('./shortDramaImport.cjs')
+const { saveQuarkCookie } = require('./quarkDrive.cjs')
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL)
 const downloadTasks = new Map()
@@ -946,6 +950,36 @@ ipcMain.handle('short-drama:list-table', async (_event, input) =>
     userDataPath: app.getPath('userData'),
     limit: Number(input?.limit) || 500,
     offset: Number(input?.offset) || 0,
+  }),
+)
+
+ipcMain.handle('short-drama:save-cookie', async (_event, input) =>
+  saveQuarkCookie({
+    userDataPath: app.getPath('userData'),
+    cookie: String(input?.cookie || ''),
+  }),
+)
+
+ipcMain.handle('short-drama:sync-episodes', async (_event, input) =>
+  syncShortDramaEpisodesFromQuark({
+    userDataPath: app.getPath('userData'),
+    dramaCode: String(input?.dramaCode || ''),
+    dramaTitle: String(input?.dramaTitle || ''),
+  }),
+)
+
+ipcMain.handle('short-drama:list-episodes', async (_event, input) =>
+  listShortDramaEpisodes({
+    userDataPath: app.getPath('userData'),
+    dramaCode: String(input?.dramaCode || ''),
+  }),
+)
+
+ipcMain.handle('short-drama:refresh-episode-link', async (_event, input) =>
+  refreshShortDramaEpisodeLink({
+    userDataPath: app.getPath('userData'),
+    dramaCode: String(input?.dramaCode || ''),
+    episodeIndex: Number(input?.episodeIndex || 0),
   }),
 )
 

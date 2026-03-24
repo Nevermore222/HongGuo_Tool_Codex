@@ -24,6 +24,11 @@ contextBridge.exposeInMainWorld('desktopApi', {
   getShortDramaDiscoveredSeries: () => ipcRenderer.invoke('short-drama:list-series'),
   getShortDramaImportBatches: (input) => ipcRenderer.invoke('short-drama:list-batches', input),
   getShortDramaTableRows: (input) => ipcRenderer.invoke('short-drama:list-table', input),
+  saveQuarkCookie: (input) => ipcRenderer.invoke('short-drama:save-cookie', input),
+  syncShortDramaEpisodes: (input) => ipcRenderer.invoke('short-drama:sync-episodes', input),
+  getShortDramaEpisodes: (input) => ipcRenderer.invoke('short-drama:list-episodes', input),
+  refreshShortDramaEpisodeLink: (input) =>
+    ipcRenderer.invoke('short-drama:refresh-episode-link', input),
   fetchDiscoveryManifest: (input) => ipcRenderer.invoke('discovery:fetch-remote', input),
   getCachedDiscoveryManifest: () => ipcRenderer.invoke('discovery:read-cache'),
   getDiscoverySyncHistory: () => ipcRenderer.invoke('discovery-history:list'),

@@ -30,6 +30,7 @@ import type {
   DesktopDownloadRecoverySummary,
   DesktopSettings,
   ShortDramaImportBatchEntry,
+  ShortDramaEpisodeEntry,
   ShortDramaImportSummary,
   ShortDramaTableSnapshot,
 } from './desktop'
@@ -327,6 +328,11 @@ function App() {
       rows: [],
     })
   const [selectedShortDramaKey, setSelectedShortDramaKey] = useState('')
+  const [shortDramaEpisodes, setShortDramaEpisodes] = useState<ShortDramaEpisodeEntry[]>([])
+  const [shortDramaEpisodesLoading, setShortDramaEpisodesLoading] = useState(false)
+  const [syncingShortDramaEpisodes, setSyncingShortDramaEpisodes] = useState(false)
+  const [quarkCookieInput, setQuarkCookieInput] = useState('')
+  const [savingQuarkCookie, setSavingQuarkCookie] = useState(false)
   const [collapsedPanels, setCollapsedPanels] =
     useState<Record<PanelKey, boolean>>(defaultCollapsedPanels)
   const [browserQueue, setBrowserQueue] = useState<DesktopDownloadTask[]>(() =>
@@ -448,6 +454,8 @@ function App() {
       ) || filteredShortDramaTableRows[0]
     )
   }, [filteredShortDramaTableRows, selectedShortDramaKey])
+
+  const selectedShortDramaCode = selectedShortDramaRow?.dramaCode || ''
 
   const displayResourceCount = hasShortDramaDataset
     ? shortDramaTableSnapshot.total
@@ -648,6 +656,39 @@ function App() {
       setSelectedShortDramaKey(`${first.dramaCode}-${first.title}`)
     }
   }, [filteredShortDramaTableRows, selectedShortDramaKey])
+
+  useEffect(() => {
+    if (!hasShortDramaDataset || !selectedShortDramaCode) {
+      setShortDramaEpisodes([])
+      return
+    }
+
+    if (!window.desktopApi || !desktopContext.isElectron) {
+      return
+    }
+
+    let disposed = false
+    setShortDramaEpisodesLoading(true)
+    void window.desktopApi
+      .getShortDramaEpisodes({ dramaCode: selectedShortDramaCode })
+      .then((rows) => {
+        if (disposed) {
+          return
+        }
+        startTransition(() => {
+          setShortDramaEpisodes(rows)
+        })
+      })
+      .finally(() => {
+        if (!disposed) {
+          setShortDramaEpisodesLoading(false)
+        }
+      })
+
+    return () => {
+      disposed = true
+    }
+  }, [hasShortDramaDataset, selectedShortDramaCode])
 
   const maxConcurrentDownloads = Math.max(1, desktopSettings.maxConcurrentDownloads || 1)
 
@@ -871,6 +912,114 @@ function App() {
       return
     }
     await loadShortDramaTableRows(nextOffset)
+  }
+
+  const saveCurrentQuarkCookie = async () => {
+    if (!window.desktopApi || !desktopContext.isElectron) {
+      return
+    }
+
+    const cookie = quarkCookieInput.trim()
+    if (!cookie) {
+      setActionMessage('请先粘贴夸克 Cookie。')
+      return
+    }
+
+    setSavingQuarkCookie(true)
+    try {
+      await window.desktopApi.saveQuarkCookie({ cookie })
+      setActionMessage('夸克 Cookie 已保存。')
+      setQuarkCookieInput('')
+    } catch (error) {
+      setActionMessage(error instanceof Error ? error.message : '保存 Cookie 失败。')
+    } finally {
+      setSavingQuarkCookie(false)
+    }
+  }
+
+  const syncSelectedShortDramaEpisodes = async () => {
+    if (!window.desktopApi || !desktopContext.isElectron || !selectedShortDramaRow) {
+      return
+    }
+
+    setSyncingShortDramaEpisodes(true)
+    try {
+      const result = await window.desktopApi.syncShortDramaEpisodes({
+        dramaCode: selectedShortDramaRow.dramaCode,
+        dramaTitle: selectedShortDramaRow.title,
+      })
+      startTransition(() => {
+        setShortDramaEpisodes(result.episodes)
+      })
+      setActionMessage(
+        `已同步 ${result.syncedEpisodes} 集，可下载 ${result.readyEpisodes} 集。`,
+      )
+    } catch (error) {
+      setActionMessage(error instanceof Error ? error.message : '同步剧集失败。')
+    } finally {
+      setSyncingShortDramaEpisodes(false)
+    }
+  }
+
+  const refreshEpisodeLink = async (episodeIndex: number) => {
+    if (!window.desktopApi || !desktopContext.isElectron || !selectedShortDramaCode) {
+      return
+    }
+
+    try {
+      const updated = await window.desktopApi.refreshShortDramaEpisodeLink({
+        dramaCode: selectedShortDramaCode,
+        episodeIndex,
+      })
+      startTransition(() => {
+        setShortDramaEpisodes((current) =>
+          current.map((item) =>
+            item.episode_index === episodeIndex ? updated : item,
+          ),
+        )
+      })
+    } catch (error) {
+      setActionMessage(error instanceof Error ? error.message : '刷新链接失败。')
+    }
+  }
+
+  const downloadEpisode = async (episode: ShortDramaEpisodeEntry) => {
+    if (!window.desktopApi || !desktopContext.isElectron || !selectedShortDramaRow) {
+      return
+    }
+
+    let sourceUrl = episode.download_url
+    if (!sourceUrl) {
+      await refreshEpisodeLink(episode.episode_index)
+      const latest = await window.desktopApi.getShortDramaEpisodes({
+        dramaCode: selectedShortDramaCode,
+      })
+      const matched = latest.find((item) => item.episode_index === episode.episode_index)
+      sourceUrl = matched?.download_url || ''
+      startTransition(() => {
+        setShortDramaEpisodes(latest)
+      })
+    }
+
+    if (!sourceUrl) {
+      setActionMessage(`第${episode.episode_index}集暂无可用下载链接。`)
+      return
+    }
+
+    await window.desktopApi.enqueueDownloads([
+      {
+        taskId: `task-short-drama-${selectedShortDramaCode}-${episode.episode_index}-${Date.now()}`,
+        adapterId: shortDramaAdapterId,
+        seriesId: `short-drama-${selectedShortDramaCode}`,
+        seriesTitle: selectedShortDramaRow.title,
+        episodeId: `${selectedShortDramaCode}-${episode.episode_index}`,
+        episodeTitle: episode.episode_title || `第${episode.episode_index}集`,
+        resolution: selectedResolution,
+        sourceUrl,
+        fileName: episode.file_name || `${selectedShortDramaRow.title}-第${episode.episode_index}集.mp4`,
+      },
+    ])
+    setActionMessage(`第${episode.episode_index}集已加入下载队列。`)
   }
 
   const handleResolutionChange = async (resolution: Resolution) => {
@@ -1923,12 +2072,37 @@ function App() {
                     >
                       打开百度网盘
                     </button>
+                    <button
+                      className="small"
+                      onClick={() => void syncSelectedShortDramaEpisodes()}
+                      disabled={syncingShortDramaEpisodes}
+                    >
+                      {syncingShortDramaEpisodes ? '同步中...' : '同步本剧分集'}
+                    </button>
                   </div>
 
                   <div className="source-note">
                     夸克网盘：{selectedShortDramaRow.quarkUrl || '-'}
                     <br />
                     百度网盘：{selectedShortDramaRow.baiduUrl || '-'}
+                  </div>
+
+                  <div className="field">
+                    <span>夸克 Cookie（仅本机保存）</span>
+                    <textarea
+                      value={quarkCookieInput}
+                      onChange={(event) => setQuarkCookieInput(event.target.value)}
+                      placeholder="粘贴夸克 Cookie 后点击保存，再执行“同步本剧分集”"
+                    />
+                    <div className="button-row">
+                      <button
+                        className="small"
+                        onClick={() => void saveCurrentQuarkCookie()}
+                        disabled={savingQuarkCookie}
+                      >
+                        {savingQuarkCookie ? '保存中...' : '保存 Cookie'}
+                      </button>
+                    </div>
                   </div>
 
                   <div className="short-drama-detail-grid">
@@ -1946,6 +2120,56 @@ function App() {
                         </button>
                       </div>
                     </article>
+                  </div>
+
+                  <div className="episode-list">
+                    {shortDramaEpisodesLoading ? (
+                      <div className="empty-state">正在加载分集...</div>
+                    ) : shortDramaEpisodes.length === 0 ? (
+                      <div className="empty-state">
+                        当前剧还没有分集数据，请先点击“同步本剧分集”。
+                      </div>
+                    ) : (
+                      shortDramaEpisodes.map((episode) => (
+                        <article
+                          key={`${episode.drama_code}-${episode.episode_index}`}
+                          className="episode-row"
+                        >
+                          <div className="episode-meta">
+                            <strong>{episode.episode_title || `第${episode.episode_index}集`}</strong>
+                            <span>{episode.file_name}</span>
+                            <span>
+                              状态 {episode.status} · {formatBytes(episode.file_size || 0)}
+                            </span>
+                          </div>
+                          <div className="episode-actions">
+                            <button
+                              className="small ghost"
+                              onClick={() =>
+                                void openExternalLink(
+                                  episode.preview_url || episode.download_url,
+                                )
+                              }
+                              disabled={!episode.preview_url && !episode.download_url}
+                            >
+                              预览
+                            </button>
+                            <button
+                              className="small ghost"
+                              onClick={() => void refreshEpisodeLink(episode.episode_index)}
+                            >
+                              刷新链接
+                            </button>
+                            <button
+                              className="small"
+                              onClick={() => void downloadEpisode(episode)}
+                            >
+                              下载
+                            </button>
+                          </div>
+                        </article>
+                      ))
+                    )}
                   </div>
                 </>
               ) : (
