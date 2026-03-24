@@ -68,6 +68,12 @@ type ShortDramaTableRow = {
   updatedAt: string
 }
 
+type PreviewState = {
+  title: string
+  sourceUrl: string
+  note: string
+}
+
 const queueStorageKey = 'hongguo-tool-framework-queue'
 const manualStorageKey = 'hongguo-tool-framework-manual'
 const libraryStorageKey = 'hongguo-tool-framework-library'
@@ -257,6 +263,15 @@ const buildRecoveryMessage = (recoverySummary: DesktopDownloadRecoverySummary | 
   return messages.join('，')
 }
 
+const resolveShortDramaPreviewUrl = (episode: ShortDramaEpisodeEntry) => {
+  const previewUrl = String(episode.preview_url || '').trim()
+  const downloadUrl = String(episode.download_url || '').trim()
+  if (previewUrl && !previewUrl.includes('/file/video/preview?')) {
+    return previewUrl
+  }
+  return downloadUrl || previewUrl
+}
+
 const buildBrowserPreviewTask = (
   series: Series,
   episode: Episode,
@@ -356,7 +371,7 @@ function App() {
   const [selectedSeriesId, setSelectedSeriesId] = useState<string>(
     initialSeries[0]?.id ?? '',
   )
-  const [previewEpisode, setPreviewEpisode] = useState<Episode | null>(null)
+  const [previewState, setPreviewState] = useState<PreviewState | null>(null)
   const [manualForm, setManualForm] = useState<ManualSourceForm>(defaultManualForm)
 
   const allSeries = useMemo(
@@ -983,19 +998,42 @@ function App() {
     }
   }
 
+  const previewShortDramaEpisode = async (episode: ShortDramaEpisodeEntry) => {
+    const rawUrl = resolveShortDramaPreviewUrl(episode)
+    if (!rawUrl) {
+      setActionMessage(`第${episode.episode_index}集暂无可用预览链接。`)
+      return
+    }
+
+    let sourceUrl = rawUrl
+    if (desktopContext.isElectron && window.desktopApi?.getPlayablePreviewUrl) {
+      try {
+        sourceUrl = await window.desktopApi.getPlayablePreviewUrl({ sourceUrl: rawUrl })
+      } catch (error) {
+        setActionMessage(error instanceof Error ? error.message : '生成预览播放地址失败。')
+      }
+    }
+
+    setPreviewState({
+      title: episode.episode_title || `第${episode.episode_index}集`,
+      sourceUrl,
+      note: '夸克同步分集预览',
+    })
+  }
+
   const downloadEpisode = async (episode: ShortDramaEpisodeEntry) => {
     if (!window.desktopApi || !desktopContext.isElectron || !selectedShortDramaRow) {
       return
     }
 
-    let sourceUrl = episode.download_url
+    let sourceUrl = String(episode.download_url || '').trim()
     if (!sourceUrl) {
       await refreshEpisodeLink(episode.episode_index)
       const latest = await window.desktopApi.getShortDramaEpisodes({
         dramaCode: selectedShortDramaCode,
       })
       const matched = latest.find((item) => item.episode_index === episode.episode_index)
-      sourceUrl = matched?.download_url || ''
+      sourceUrl = String(matched?.download_url || '').trim()
       startTransition(() => {
         setShortDramaEpisodes(latest)
       })
@@ -1004,6 +1042,15 @@ function App() {
     if (!sourceUrl) {
       setActionMessage(`第${episode.episode_index}集暂无可用下载链接。`)
       return
+    }
+
+    if (window.desktopApi.getPlayablePreviewUrl) {
+      try {
+        sourceUrl = await window.desktopApi.getPlayablePreviewUrl({ sourceUrl })
+      } catch (error) {
+        setActionMessage(error instanceof Error ? error.message : '生成下载地址失败。')
+        return
+      }
     }
 
     await window.desktopApi.enqueueDownloads([
@@ -2130,7 +2177,9 @@ function App() {
                         当前剧还没有分集数据，请先点击“同步本剧分集”。
                       </div>
                     ) : (
-                      shortDramaEpisodes.map((episode) => (
+                      shortDramaEpisodes.map((episode) => {
+                        const previewUrl = resolveShortDramaPreviewUrl(episode)
+                        return (
                         <article
                           key={`${episode.drama_code}-${episode.episode_index}`}
                           className="episode-row"
@@ -2145,12 +2194,8 @@ function App() {
                           <div className="episode-actions">
                             <button
                               className="small ghost"
-                              onClick={() =>
-                                void openExternalLink(
-                                  episode.preview_url || episode.download_url,
-                                )
-                              }
-                              disabled={!episode.preview_url && !episode.download_url}
+                              onClick={() => void previewShortDramaEpisode(episode)}
+                              disabled={!previewUrl}
                             >
                               预览
                             </button>
@@ -2168,7 +2213,8 @@ function App() {
                             </button>
                           </div>
                         </article>
-                      ))
+                        )
+                      })
                     )}
                   </div>
                 </>
@@ -2241,7 +2287,13 @@ function App() {
                       <div className="episode-actions">
                         <button
                           className="small ghost"
-                          onClick={() => setPreviewEpisode(episode)}
+                          onClick={() =>
+                            setPreviewState({
+                              title: episode.title,
+                              sourceUrl: previewVideoUrl,
+                              note: '演示资源预览',
+                            })
+                          }
                           disabled={!episode.hasPreview}
                         >
                           预览
@@ -3037,22 +3089,27 @@ function App() {
         </section>
       </div>
 
-      {previewEpisode ? (
-        <div className="modal-backdrop" onClick={() => setPreviewEpisode(null)}>
+      {previewState ? (
+        <div className="modal-backdrop" onClick={() => setPreviewState(null)}>
           <div className="modal" onClick={(event) => event.stopPropagation()}>
             <div className="section-header">
               <div>
                 <p className="eyebrow">预览窗口</p>
-                <h3>{previewEpisode.title}</h3>
+                <h3>{previewState.title}</h3>
               </div>
-              <button className="small ghost" onClick={() => setPreviewEpisode(null)}>
+              <button className="small ghost" onClick={() => setPreviewState(null)}>
                 关闭
               </button>
             </div>
-            <video controls className="preview-player" src={previewVideoUrl} />
-            <p className="modal-note">
-              当前预览使用公共演示视频占位，只验证播放器弹窗和交互结构。
-            </p>
+            <video
+              controls
+              className="preview-player"
+              src={previewState.sourceUrl}
+              onError={() => {
+                setActionMessage('预览播放失败，请先点“刷新链接”后重试。')
+              }}
+            />
+            <p className="modal-note">来源：{previewState.note}</p>
           </div>
         </div>
       ) : null}

@@ -29,6 +29,8 @@ contextBridge.exposeInMainWorld('desktopApi', {
   getShortDramaEpisodes: (input) => ipcRenderer.invoke('short-drama:list-episodes', input),
   refreshShortDramaEpisodeLink: (input) =>
     ipcRenderer.invoke('short-drama:refresh-episode-link', input),
+  getPlayablePreviewUrl: (input) =>
+    ipcRenderer.invoke('short-drama:get-playable-preview-url', input),
   fetchDiscoveryManifest: (input) => ipcRenderer.invoke('discovery:fetch-remote', input),
   getCachedDiscoveryManifest: () => ipcRenderer.invoke('discovery:read-cache'),
   getDiscoverySyncHistory: () => ipcRenderer.invoke('discovery-history:list'),

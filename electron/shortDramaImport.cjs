@@ -922,12 +922,13 @@ const syncShortDramaEpisodesFromQuark = async ({
       for (const item of normalizedVideos) {
         const info = downloadInfoMap.get(item.fid) || {}
         const downloadUrl = String(info.download_url || '')
-        let previewUrl = String(info.preview_url || '')
+        let previewUrl = ''
+        try {
+          const playInfo = await fetchPlayInfo({ userDataPath, fid: item.fid })
+          previewUrl = extractPreviewUrlFromPlayInfo(playInfo)
+        } catch {}
         if (!previewUrl) {
-          try {
-            const playInfo = await fetchPlayInfo({ userDataPath, fid: item.fid })
-            previewUrl = extractPreviewUrlFromPlayInfo(playInfo)
-          } catch {}
+          previewUrl = downloadUrl
         }
 
         upsert.run(
@@ -996,15 +997,16 @@ const refreshShortDramaEpisodeLink = async ({ userDataPath, dramaCode, episodeIn
     })
     const downloadUrl = String(downloadInfo?.download_url || '')
 
-    let previewUrl = String(downloadInfo?.preview_url || '')
+    let previewUrl = ''
+    try {
+      const playInfo = await fetchPlayInfo({
+        userDataPath,
+        fid: row.quark_file_id,
+      })
+      previewUrl = extractPreviewUrlFromPlayInfo(playInfo)
+    } catch {}
     if (!previewUrl) {
-      try {
-        const playInfo = await fetchPlayInfo({
-          userDataPath,
-          fid: row.quark_file_id,
-        })
-        previewUrl = extractPreviewUrlFromPlayInfo(playInfo)
-      } catch {}
+      previewUrl = downloadUrl
     }
 
     db.prepare(

@@ -12,6 +12,8 @@ dist
 dist-ssr
 *.local
 release
+reports
+(短剧查询)表格视图.xlsx
 
 # Editor directories and files
 .vscode/*

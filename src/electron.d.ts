@@ -65,6 +65,7 @@ type DesktopApi = {
     dramaCode: string
     episodeIndex: number
   }) => Promise<ShortDramaEpisodeEntry>
+  getPlayablePreviewUrl: (input: { sourceUrl: string }) => Promise<string>
   fetchDiscoveryManifest: (
     input: DiscoverySyncInput,
   ) => Promise<DiscoveryCacheSnapshot>

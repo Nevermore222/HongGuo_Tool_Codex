@@ -15,7 +15,7 @@ const {
   refreshShortDramaEpisodeLink,
   syncShortDramaEpisodesFromQuark,
 } = require('./shortDramaImport.cjs')
-const { saveQuarkCookie } = require('./quarkDrive.cjs')
+const { resolveQuarkCookie, saveQuarkCookie } = require('./quarkDrive.cjs')
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL)
 const downloadTasks = new Map()
@@ -30,6 +30,8 @@ let persistLogsTimer = null
 let persistDiscoveryHistoryTimer = null
 const maxDownloadLogs = 2000
 const maxDiscoveryHistoryEntries = 200
+let quarkPreviewProxyServer = null
+let quarkPreviewProxyPort = 0
 
 const defaultSettings = () => ({
   downloadDirectory: app.getPath('downloads'),
@@ -465,7 +467,7 @@ const listTaskSnapshots = () =>
       episodeId: task.episodeId,
       episodeTitle: task.episodeTitle,
       resolution: task.resolution,
-      sourceUrl: task.sourceUrl,
+      sourceUrl: '',
       fileName: task.fileName,
       outputPath: task.outputPath,
       progress: task.progress,
@@ -553,8 +555,192 @@ const updateTaskProgress = (task, transferredBytes, totalBytes) => {
     totalBytes !== previousTotal
   ) {
     task.progress = nextProgress
-    broadcastDownloads()
+    const progressed = nextProgress !== previousProgress
+    const completed = totalBytes > 0 && transferredBytes >= totalBytes
+    const byteDelta = Math.abs(
+      transferredBytes - Number(task.lastProgressEmitBytes || 0),
+    )
+    const minByteDelta = totalBytes > 0 ? 1024 * 1024 : 8 * 1024 * 1024
+
+    if (progressed || completed || byteDelta >= minByteDelta) {
+      task.lastProgressEmitBytes = transferredBytes
+      broadcastDownloads()
+    }
   }
+}
+
+const isQuarkMediaHost = (hostname) => {
+  const host = String(hostname || '').toLowerCase()
+  return host === 'drive.quark.cn' || host.endsWith('.quark.cn')
+}
+
+const readErrorBody = async (response) => {
+  const chunks = []
+  let total = 0
+  for await (const chunk of response) {
+    chunks.push(chunk)
+    total += chunk.length
+    if (total >= 64 * 1024) {
+      break
+    }
+  }
+  return Buffer.concat(chunks).toString('utf8')
+}
+
+const streamQuarkMedia = async ({ targetUrl, req, res, redirects = 0 }) => {
+  const target = new URL(String(targetUrl || ''))
+  if (!isQuarkMediaHost(target.hostname)) {
+    res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' })
+    res.end('unsupported host')
+    return
+  }
+
+  const cookie = await resolveQuarkCookie(app.getPath('userData'))
+  if (!cookie) {
+    res.writeHead(401, { 'content-type': 'text/plain; charset=utf-8' })
+    res.end('missing quark cookie')
+    return
+  }
+
+  const client = target.protocol === 'https:' ? https : http
+  const upstreamReq = client.request(
+    {
+      protocol: target.protocol,
+      hostname: target.hostname,
+      port: target.port || undefined,
+      method: 'GET',
+      path: `${target.pathname}${target.search}`,
+      headers: {
+        cookie,
+        referer: 'https://pan.quark.cn/',
+        'user-agent':
+          req.headers['user-agent'] ||
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+        accept: req.headers.accept || '*/*',
+        range: req.headers.range || '',
+      },
+    },
+    async (upstreamRes) => {
+      try {
+        const status = Number(upstreamRes.statusCode || 500)
+        const location = String(upstreamRes.headers.location || '')
+        if ([301, 302, 303, 307, 308].includes(status) && location && redirects < 4) {
+          upstreamRes.resume()
+          const nextUrl = new URL(location, target).toString()
+          await streamQuarkMedia({
+            targetUrl: nextUrl,
+            req,
+            res,
+            redirects: redirects + 1,
+          })
+          return
+        }
+
+        const headers = {}
+        for (const key of [
+          'content-type',
+          'content-length',
+          'content-range',
+          'accept-ranges',
+          'cache-control',
+          'etag',
+          'last-modified',
+        ]) {
+          const value = upstreamRes.headers[key]
+          if (value !== undefined) {
+            headers[key] = value
+          }
+        }
+        headers['access-control-allow-origin'] = '*'
+
+        if (status >= 400) {
+          const detail = await readErrorBody(upstreamRes)
+          res.writeHead(status, {
+            ...headers,
+            'content-type': 'text/plain; charset=utf-8',
+          })
+          res.end(detail || `upstream ${status}`)
+          return
+        }
+
+        res.writeHead(status, headers)
+        upstreamRes.pipe(res)
+      } catch (error) {
+        if (!res.headersSent) {
+          res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' })
+        }
+        res.end(error instanceof Error ? error.message : 'proxy upstream error')
+      }
+    },
+  )
+
+  upstreamReq.on('error', (error) => {
+    if (!res.headersSent) {
+      res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' })
+    }
+    res.end(error instanceof Error ? error.message : 'proxy request error')
+  })
+  upstreamReq.end()
+}
+
+const ensureQuarkPreviewProxy = async () => {
+  if (quarkPreviewProxyServer && quarkPreviewProxyPort > 0) {
+    return quarkPreviewProxyPort
+  }
+
+  await new Promise((resolve, reject) => {
+    const server = http.createServer(async (req, res) => {
+      try {
+        const requestUrl = new URL(req.url || '/', 'http://127.0.0.1')
+        if (requestUrl.pathname !== '/quark-media') {
+          res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+          res.end('not found')
+          return
+        }
+
+        const target = String(requestUrl.searchParams.get('target') || '')
+        if (!target) {
+          res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' })
+          res.end('missing target')
+          return
+        }
+
+        await streamQuarkMedia({ targetUrl: target, req, res })
+      } catch (error) {
+        if (!res.headersSent) {
+          res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
+        }
+        res.end(error instanceof Error ? error.message : 'proxy failed')
+      }
+    })
+
+    server.on('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      if (!address || typeof address === 'string') {
+        reject(new Error('preview proxy bind failed'))
+        return
+      }
+      quarkPreviewProxyServer = server
+      quarkPreviewProxyPort = address.port
+      resolve()
+    })
+  })
+
+  return quarkPreviewProxyPort
+}
+
+const buildQuarkPreviewProxyUrl = async (sourceUrl) => {
+  const raw = String(sourceUrl || '').trim()
+  if (!raw) {
+    throw new Error('preview source url is required')
+  }
+  const target = new URL(raw)
+  if (!isQuarkMediaHost(target.hostname)) {
+    return raw
+  }
+  const port = await ensureQuarkPreviewProxy()
+  return `http://127.0.0.1:${port}/quark-media?target=${encodeURIComponent(raw)}`
 }
 
 const downloadLocalFile = async (sourcePath, outputPath, task, signal) => {
@@ -699,9 +885,20 @@ const downloadToFile = async (task, outputPath, signal) => {
 }
 
 const startTask = async (task) => {
+  if (task.__starting) {
+    return
+  }
   if (activeDownloads.has(task.id) || task.status !== '等待中') {
     return
   }
+
+  task.__starting = true
+  task.status = 'starting'
+  const startingPlaceholder = {
+    abort: () => {},
+    signal: { aborted: false, reason: 'starting' },
+  }
+  activeDownloads.set(task.id, startingPlaceholder)
 
   const settings = await ensureSettings()
   await fsp.mkdir(settings.downloadDirectory, { recursive: true })
@@ -771,6 +968,7 @@ const startTask = async (task) => {
       })
     }
   } finally {
+    task.__starting = false
     activeDownloads.delete(task.id)
     broadcastDownloads()
     void maybeStartDownloads()
@@ -790,7 +988,10 @@ const maybeStartDownloads = async () => {
     const limit = Math.max(1, settings.maxConcurrentDownloads || 1)
 
     while (true) {
-      const activeCount = activeDownloads.size
+      const startingCount = Array.from(downloadTasks.values()).filter((task) =>
+        Boolean(task.__starting),
+      ).length
+      const activeCount = activeDownloads.size + startingCount
       if (activeCount >= limit) {
         break
       }
@@ -981,6 +1182,10 @@ ipcMain.handle('short-drama:refresh-episode-link', async (_event, input) =>
     dramaCode: String(input?.dramaCode || ''),
     episodeIndex: Number(input?.episodeIndex || 0),
   }),
+)
+
+ipcMain.handle('short-drama:get-playable-preview-url', async (_event, input) =>
+  buildQuarkPreviewProxyUrl(String(input?.sourceUrl || '')),
 )
 
 ipcMain.handle('discovery:fetch-remote', async (_event, input) => {
@@ -1223,6 +1428,11 @@ app.on('before-quit', () => {
   if (persistDiscoveryHistoryTimer) {
     clearTimeout(persistDiscoveryHistoryTimer)
     persistDiscoveryHistoryTimer = null
+  }
+  if (quarkPreviewProxyServer) {
+    quarkPreviewProxyServer.close()
+    quarkPreviewProxyServer = null
+    quarkPreviewProxyPort = 0
   }
   void persistDownloadTasks()
   void persistDownloadLogs()

@@ -35,6 +35,7 @@ npm run dev:desktop
 说明：
 - `npm run dev` 只启动浏览器预览，不会读取 Electron `userData` 下的数据库。
 - 请使用 `npm run dev:desktop` 运行桌面模式，才能使用 Excel 导入和数据库功能。
+- `npm run dev:electron` 已内置 `NODE_OPTIONS=--max-old-space-size=8192`，用于避免开发态长任务导致的 V8 堆内存不足。
 
 ## Excel 导入流程
 
@@ -52,12 +53,11 @@ npm run dev:desktop
 
 ## 夸克 Cookie 自动采集字段（本地运行）
 
-你可以用脚本自动导出“已转存文件清单”CSV，再导入下载系统。
+你可以用脚本导出你账号下的“已转存文件清单”CSV（用于二次加工/对账）。
 
-脚本：
-- `scripts/export_quark_manifest.mjs`
+脚本：`scripts/export_quark_manifest.mjs`
 
-使用方式（PowerShell）：
+使用方式（PowerShell），或直接执行：`npm run quark:export`
 
 ```powershell
 $env:QUARK_COOKIE='这里放你自己的完整 Cookie'
@@ -88,8 +88,8 @@ node scripts/export_quark_manifest.mjs
 
 当你已把某部短剧转存到自己的夸克网盘后，系统支持：
 - 同步该剧分集（自动识别第1集、第2集...）
-- 生成每集 `preview_url` 与 `download_url`
-- 在详情面板直接 `预览 / 刷新链接 / 下载`
+- 生成每集 `preview_url` 与 `download_url`（可过期，支持刷新）
+- 在详情面板直接 `预览 / 刷新链接 / 下载`（桌面端弹窗播放）
 - 下载任务进入现有下载队列（支持并发、暂停、重试）
 
 操作步骤：
@@ -99,14 +99,16 @@ node scripts/export_quark_manifest.mjs
 4. 同步完成后，直接对每一集点击预览或下载
 
 说明：
-- 链接可能过期，点击“刷新链接”可重新获取当前可用地址。
+- 夸克直链通常需要携带 Cookie/Referer，否则会返回 `HTTP 412`。
+- 本项目对夸克视频的预览与下载统一走“本地代理”通道：由 Electron 主进程代发请求并自动带上 Cookie/Referer，前端播放器与下载器都只访问 `127.0.0.1` 的代理地址。
+- 链接可能过期，点击“刷新链接”可重新获取当前可用地址（再预览/下载）。
 - 该能力只使用你账号可访问的数据，不处理未授权内容。
 
 ## SQLite 数据库位置
 
 默认路径（Windows）：
 
-`C:\Users\Administrator\AppData\Roaming\hongguo-autotools\short-drama-library.db`
+`%APPDATA%\hongguo-autotools\short-drama-library.db`
 
 说明：
 - 这是 Electron `app.getPath('userData')` 下的数据库文件。
@@ -146,6 +148,12 @@ npm run dist:win
 - 确认运行的是 `npm run dev:desktop`，不是纯浏览器 `npm run dev`
 - 重新启动 Electron 窗口（主进程改动后需要重启）
 - 点击总表区域“刷新”按钮
+
+### 下载失败，HTTP 状态码 412
+
+- 412 通常表示夸克侧要求 Cookie/Referer：确认右侧已粘贴并保存夸克 Cookie。
+- 点击该集“刷新链接”，再重试下载。
+- 如果 Cookie 过期，需要更新 Cookie（仅保存在本机 `userData`，不要提交到 Git）。
 
 ### 只看到演示数据
 
