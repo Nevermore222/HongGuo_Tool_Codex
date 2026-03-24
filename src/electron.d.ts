@@ -36,6 +36,7 @@ type DesktopApi = {
   retryFailedDownloads: () => Promise<DesktopDownloadTask[]>
   clearCompletedDownloads: () => Promise<DesktopDownloadTask[]>
   clearFailedDownloads: () => Promise<DesktopDownloadTask[]>
+  removeDownload: (taskId: string) => Promise<DesktopDownloadTask[]>
   getDownloadLogs: () => Promise<DesktopDownloadLogEntry[]>
   clearDownloadLogs: () => Promise<DesktopDownloadLogEntry[]>
   openDownloadFile: (taskId: string) => Promise<string>

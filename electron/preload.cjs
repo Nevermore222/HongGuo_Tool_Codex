@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('desktopApi', {
   retryFailedDownloads: () => ipcRenderer.invoke('downloads:retry-failed'),
   clearCompletedDownloads: () => ipcRenderer.invoke('downloads:clear-completed'),
   clearFailedDownloads: () => ipcRenderer.invoke('downloads:clear-failed'),
+  removeDownload: (taskId) => ipcRenderer.invoke('downloads:remove', taskId),
   getDownloadLogs: () => ipcRenderer.invoke('download-logs:list'),
   clearDownloadLogs: () => ipcRenderer.invoke('download-logs:clear'),
   openDownloadFile: (taskId) => ipcRenderer.invoke('downloads:open-file', taskId),

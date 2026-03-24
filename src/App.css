@@ -1655,7 +1655,8 @@ button:disabled {
 }
 
 .client-episode-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -1680,6 +1681,7 @@ button:disabled {
 
 .client-queue-row {
   display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
   gap: 8px;
   padding: 12px 14px;
 }
@@ -1695,6 +1697,65 @@ button:disabled {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+}
+
+.client-queue-row > :not(.client-check) {
+  grid-column: 2;
+}
+
+.client-check {
+  display: inline-flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 2px;
+}
+
+.client-check input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.client-check span {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  background: rgba(15, 23, 42, 0.9);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+}
+
+.client-check input:checked + span {
+  border-color: rgba(56, 189, 248, 0.9);
+  background: linear-gradient(180deg, rgba(14, 165, 233, 0.9), rgba(37, 99, 235, 0.9));
+}
+
+.client-task-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.icon-button {
+  min-width: 32px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-strong);
+  font-size: 0.76rem;
+}
+
+.icon-button:hover {
+  border-color: rgba(56, 189, 248, 0.32);
+  background: rgba(56, 189, 248, 0.12);
+}
+
+.client-task-status {
+  color: #bbf7d0;
+  font-size: 0.8rem;
 }
 
 .client-queue-row p,

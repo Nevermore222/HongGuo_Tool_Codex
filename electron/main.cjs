@@ -1652,6 +1652,29 @@ ipcMain.handle('downloads:clear-failed', async () => {
   return listTaskSnapshots()
 })
 
+ipcMain.handle('downloads:remove', async (_event, taskId) => {
+  const task = downloadTasks.get(taskId)
+  if (!task) {
+    return listTaskSnapshots()
+  }
+
+  const controller = activeDownloads.get(taskId)
+  if (controller) {
+    controller.abort('removed')
+  }
+
+  await removeTaskArtifacts(task, { includeOutput: false })
+  downloadTasks.delete(taskId)
+  appendDownloadLog({
+    task,
+    level: '信息',
+    message: '任务已从队列移除。',
+    outputPath: task.outputPath,
+  })
+  broadcastDownloads()
+  return listTaskSnapshots()
+})
+
 ipcMain.handle('downloads:open-file', async (_event, taskId) => {
   const task = downloadTasks.get(taskId)
   if (!task?.outputPath) {

@@ -502,6 +502,8 @@ function App() {
   const [remoteSaveSubmitting, setRemoteSaveSubmitting] = useState(false)
   const [lastAutoRequestedDramaCode, setLastAutoRequestedDramaCode] = useState('')
   const [selectedShortDramaCoverPreviewUrl, setSelectedShortDramaCoverPreviewUrl] = useState('')
+  const [selectedEpisodeIds, setSelectedEpisodeIds] = useState<string[]>([])
+  const [selectedQueueTaskIds, setSelectedQueueTaskIds] = useState<string[]>([])
   const [selectedSeriesId, setSelectedSeriesId] = useState<string>(
     initialSeries[0]?.id ?? '',
   )
@@ -1099,6 +1101,22 @@ function App() {
     selectedShortDramaCode,
   ])
 
+  useEffect(() => {
+    setSelectedEpisodeIds([])
+  }, [selectedShortDramaCode])
+
+  useEffect(() => {
+    const validIds = new Set(
+      shortDramaEpisodes.map((episode) => `${episode.drama_code}-${episode.episode_index}`),
+    )
+    setSelectedEpisodeIds((current) => current.filter((item) => validIds.has(item)))
+  }, [shortDramaEpisodes])
+
+  useEffect(() => {
+    const validIds = new Set(visibleQueue.map((item) => item.id))
+    setSelectedQueueTaskIds((current) => current.filter((item) => validIds.has(item)))
+  }, [visibleQueue])
+
   const maxConcurrentDownloads = Math.max(1, desktopSettings.maxConcurrentDownloads || 1)
 
   useEffect(() => {
@@ -1183,6 +1201,10 @@ function App() {
         )
         .slice(0, 80),
     [desktopLogs],
+  )
+  const selectedQueueTasks = useMemo(
+    () => visibleQueue.filter((item) => selectedQueueTaskIds.includes(item.id)),
+    [selectedQueueTaskIds, visibleQueue],
   )
 
   const dashboardStats = useMemo(() => {
@@ -1658,6 +1680,122 @@ function App() {
         ? `已批量加入 ${tasks.length} 集下载任务。`
         : `已批量加入 ${tasks.length} 个未加入队列的分集。`,
     )
+  }
+
+  const toggleEpisodeSelection = (episode: ShortDramaEpisodeEntry) => {
+    const targetId = `${episode.drama_code}-${episode.episode_index}`
+    setSelectedEpisodeIds((current) =>
+      current.includes(targetId)
+        ? current.filter((item) => item !== targetId)
+        : [...current, targetId],
+    )
+  }
+
+  const selectAllEpisodes = () => {
+    setSelectedEpisodeIds(
+      shortDramaEpisodes.map((episode) => `${episode.drama_code}-${episode.episode_index}`),
+    )
+  }
+
+  const clearEpisodeSelection = () => {
+    setSelectedEpisodeIds([])
+  }
+
+  const downloadSelectedEpisodes = async () => {
+    if (!window.desktopApi || !desktopContext.isElectron || !selectedShortDramaRow) {
+      return
+    }
+
+    const selectedEpisodes = shortDramaEpisodes.filter((episode) =>
+      selectedEpisodeIds.includes(`${episode.drama_code}-${episode.episode_index}`),
+    )
+    if (selectedEpisodes.length === 0) {
+      setActionMessage('请先勾选要下载的分集。')
+      return
+    }
+
+    const tasks = []
+    for (const episode of selectedEpisodes) {
+      try {
+        const task = await buildShortDramaDownloadTask(episode)
+        if (task) {
+          tasks.push(task)
+        }
+      } catch (error) {
+        setActionMessage(error instanceof Error ? error.message : '批量生成下载任务失败。')
+        return
+      }
+    }
+
+    if (tasks.length === 0) {
+      setActionMessage('选中的分集当前没有可用下载链接。')
+      return
+    }
+
+    await window.desktopApi.enqueueDownloads(tasks)
+    setActionMessage(`已将 ${tasks.length} 个选中分集加入下载队列。`)
+  }
+
+  const toggleQueueSelection = (taskId: string) => {
+    setSelectedQueueTaskIds((current) =>
+      current.includes(taskId)
+        ? current.filter((item) => item !== taskId)
+        : [...current, taskId],
+    )
+  }
+
+  const selectAllQueueTasks = () => {
+    setSelectedQueueTaskIds(visibleQueue.map((item) => item.id))
+  }
+
+  const clearQueueSelection = () => {
+    setSelectedQueueTaskIds([])
+  }
+
+  const pauseSelectedQueueTasks = async () => {
+    if (!window.desktopApi || !desktopContext.isElectron) {
+      return
+    }
+    const tasks = selectedQueueTasks.filter(
+      (item) => item.status === '下载中' || item.status === '等待中',
+    )
+    for (const task of tasks) {
+      await window.desktopApi.pauseDownload(task.id)
+    }
+    setActionMessage(`已暂停 ${tasks.length} 条选中任务。`)
+  }
+
+  const resumeSelectedQueueTasks = async () => {
+    if (!window.desktopApi || !desktopContext.isElectron) {
+      return
+    }
+    const tasks = selectedQueueTasks.filter(
+      (item) => item.status === '已暂停' || item.status === '失败',
+    )
+    for (const task of tasks) {
+      await window.desktopApi.resumeDownload(task.id)
+    }
+    setActionMessage(`已恢复 ${tasks.length} 条选中任务。`)
+  }
+
+  const removeSelectedQueueTasks = async () => {
+    if (!window.desktopApi || !desktopContext.isElectron) {
+      return
+    }
+    const tasks = [...selectedQueueTaskIds]
+    for (const taskId of tasks) {
+      await window.desktopApi.removeDownload(taskId)
+    }
+    setSelectedQueueTaskIds([])
+    setActionMessage(`已移除 ${tasks.length} 条选中任务。`)
+  }
+
+  const removeQueueItem = async (taskId: string) => {
+    if (!window.desktopApi || !desktopContext.isElectron) {
+      return
+    }
+    await window.desktopApi.removeDownload(taskId)
+    setActionMessage('任务已从队列移除。')
   }
 
   const handleResolutionChange = async (resolution: Resolution) => {
@@ -2725,11 +2863,31 @@ function App() {
                       <span>
                         {shortDramaEpisodesLoading
                           ? '正在加载已同步分集'
-                          : `当前可见 ${shortDramaEpisodes.length} 集`}
+                          : `当前可见 ${shortDramaEpisodes.length} 集 · 已选中 ${selectedEpisodeIds.length} 集`}
                       </span>
                     </div>
-                    <div className="client-episode-hint">
-                      客户端仅展示可预览 / 可下载的已同步分集
+                    <div className="client-episode-actions">
+                      <button
+                        className="small"
+                        onClick={() => void downloadSelectedEpisodes()}
+                        disabled={selectedEpisodeIds.length === 0}
+                      >
+                        下载选中
+                      </button>
+                      <button
+                        className="small ghost"
+                        onClick={() => selectAllEpisodes()}
+                        disabled={shortDramaEpisodes.length === 0}
+                      >
+                        全选
+                      </button>
+                      <button
+                        className="small ghost"
+                        onClick={() => clearEpisodeSelection()}
+                        disabled={selectedEpisodeIds.length === 0}
+                      >
+                        全不选
+                      </button>
                     </div>
                   </div>
 
@@ -2746,6 +2904,16 @@ function App() {
                             key={`${episode.drama_code}-${episode.episode_index}`}
                             className="client-episode-row"
                           >
+                            <label className="client-check">
+                              <input
+                                type="checkbox"
+                                checked={selectedEpisodeIds.includes(
+                                  `${episode.drama_code}-${episode.episode_index}`,
+                                )}
+                                onChange={() => toggleEpisodeSelection(episode)}
+                              />
+                              <span />
+                            </label>
                             <div className="client-episode-meta">
                               <strong>
                                 {episode.episode_title || `第${episode.episode_index}集`}
@@ -2806,8 +2974,44 @@ function App() {
                 <>
                   <div className="client-queue-actions">
                     <span className="pill">
-                      进行中 {queueStats.downloading} / 等待 {queueStats.waiting}
+                      进行中 {queueStats.downloading} / 等待 {queueStats.waiting} / 已选中{' '}
+                      {selectedQueueTaskIds.length}
                     </span>
+                    <button
+                      className="small ghost"
+                      onClick={() => selectAllQueueTasks()}
+                      disabled={visibleQueue.length === 0}
+                    >
+                      全选任务
+                    </button>
+                    <button
+                      className="small ghost"
+                      onClick={() => clearQueueSelection()}
+                      disabled={selectedQueueTaskIds.length === 0}
+                    >
+                      清空选择
+                    </button>
+                    <button
+                      className="small ghost"
+                      onClick={() => void pauseSelectedQueueTasks()}
+                      disabled={selectedQueueTasks.length === 0}
+                    >
+                      暂停选中
+                    </button>
+                    <button
+                      className="small ghost"
+                      onClick={() => void resumeSelectedQueueTasks()}
+                      disabled={selectedQueueTasks.length === 0}
+                    >
+                      恢复选中
+                    </button>
+                    <button
+                      className="small ghost"
+                      onClick={() => void removeSelectedQueueTasks()}
+                      disabled={selectedQueueTasks.length === 0}
+                    >
+                      移除选中
+                    </button>
                     <button className="small" onClick={() => void retryFailedDownloads()}>
                       重试失败
                     </button>
@@ -2824,6 +3028,14 @@ function App() {
                     ) : (
                       visibleQueue.map((item) => (
                         <article key={item.id} className="client-queue-row">
+                          <label className="client-check">
+                            <input
+                              type="checkbox"
+                              checked={selectedQueueTaskIds.includes(item.id)}
+                              onChange={() => toggleQueueSelection(item.id)}
+                            />
+                            <span />
+                          </label>
                           <div className="client-queue-head">
                             <strong>
                               {item.episodeTitle} {item.resolution}
@@ -2838,23 +3050,32 @@ function App() {
                             <span>
                               {formatBytes(item.transferredBytes)} / {formatBytes(item.totalBytes)}
                             </span>
-                            <div className="button-row">
+                            <div className="client-task-actions">
                               {item.status !== '已完成' ? (
                                 <button
-                                  className="small ghost"
+                                  className="icon-button"
                                   onClick={() => void toggleQueueItem(item)}
+                                  title={item.status === '已暂停' || item.status === '失败' ? '恢复' : '暂停'}
                                 >
-                                  {item.status === '已暂停' || item.status === '失败'
-                                    ? '恢复'
-                                    : '暂停'}
+                                  {item.status === '已暂停' || item.status === '失败' ? '恢' : '停'}
                                 </button>
-                              ) : null}
-                              {desktopContext.isElectron && item.status === '已完成' ? (
+                              ) : (
+                                <span className="client-task-status">已完成</span>
+                              )}
+                              <button
+                                className="icon-button"
+                                onClick={() => void removeQueueItem(item.id)}
+                                title="移除"
+                              >
+                                删
+                              </button>
+                              {desktopContext.isElectron && item.outputPath ? (
                                 <button
-                                  className="small ghost"
+                                  className="icon-button"
                                   onClick={() => void showDownloadInFolder(item.id)}
+                                  title="打开目录"
                                 >
-                                  打开位置
+                                  夹
                                 </button>
                               ) : null}
                             </div>
