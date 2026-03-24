@@ -7,6 +7,8 @@ const path = require('node:path')
 const { pipeline } = require('node:stream/promises')
 const { fileURLToPath, URL } = require('node:url')
 const {
+  getShortDramaCoverCache,
+  getShortDramaCoverDataUrl,
   getShortDramaResource,
   getShortDramaSaveRequest,
   importShortDramaWorkbook,
@@ -776,6 +778,17 @@ const sendJson = (res, statusCode, payload) => {
   res.end(JSON.stringify(payload))
 }
 
+const sendBinary = (res, statusCode, payload, contentType = 'application/octet-stream') => {
+  res.writeHead(statusCode, {
+    'content-type': contentType,
+    'cache-control': 'private, max-age=86400',
+    'access-control-allow-origin': '*',
+    'access-control-allow-methods': 'GET,POST,OPTIONS',
+    'access-control-allow-headers': 'Content-Type, Authorization',
+  })
+  res.end(payload)
+}
+
 const readRequestBody = async (req) => {
   const chunks = []
   for await (const chunk of req) {
@@ -922,7 +935,7 @@ const startRemoteAdminService = async () => {
         return
       }
 
-      const matchedCode = /^\/api\/short-dramas\/([^/]+)(?:\/(episodes|request))?$/.exec(pathname)
+      const matchedCode = /^\/api\/short-dramas\/([^/]+)(?:\/(episodes|request|cover))?$/.exec(pathname)
       if (matchedCode) {
         const dramaCode = decodeURIComponent(matchedCode[1] || '')
         const action = matchedCode[2] || ''
@@ -940,6 +953,22 @@ const startRemoteAdminService = async () => {
             userDataPath: app.getPath('userData'),
             dramaCode,
           }))
+          return
+        }
+
+        if (req.method === 'GET' && action === 'cover') {
+          const cover = getShortDramaCoverCache({
+            userDataPath: app.getPath('userData'),
+            dramaCode,
+          })
+          if (!cover?.image_blob) {
+            sendJson(res, 404, { error: 'cover_not_found' })
+            return
+          }
+          const payload = Buffer.isBuffer(cover.image_blob)
+            ? cover.image_blob
+            : Buffer.from(cover.image_blob)
+          sendBinary(res, 200, payload, String(cover.mime_type || 'image/jpeg'))
           return
         }
 
@@ -1434,6 +1463,13 @@ ipcMain.handle('short-drama:refresh-episode-link', async (_event, input) =>
 
 ipcMain.handle('short-drama:get-playable-preview-url', async (_event, input) =>
   buildQuarkPreviewProxyUrl(String(input?.sourceUrl || '')),
+)
+
+ipcMain.handle('short-drama:get-cover-data-url', async (_event, input) =>
+  getShortDramaCoverDataUrl({
+    userDataPath: app.getPath('userData'),
+    dramaCode: String(input?.dramaCode || ''),
+  }),
 )
 
 ipcMain.handle('discovery:fetch-remote', async (_event, input) => {

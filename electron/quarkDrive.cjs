@@ -48,6 +48,18 @@ const isVideoFile = (item) => {
   )
 }
 
+const isImageFile = (item) => {
+  const category = normalize(item?.obj_category).toLowerCase()
+  if (category.includes('image')) {
+    return true
+  }
+
+  const fileName = normalize(item?.file_name).toLowerCase()
+  return ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'].some((ext) =>
+    fileName.endsWith(ext),
+  )
+}
+
 const readPersistedCookie = async (userDataPath) => {
   try {
     const raw = await fs.readFile(getQuarkCookiePath(userDataPath), 'utf8')
@@ -116,6 +128,35 @@ const requestJson = async ({ userDataPath, url, method = 'GET', body }) => {
   }
 
   return payload
+}
+
+const requestBuffer = async ({ userDataPath, url, method = 'GET', headers = {} }) => {
+  const cookie = await resolveQuarkCookie(userDataPath)
+  if (!cookie) {
+    throw new Error('未配置夸克 Cookie。请先在下载系统内保存 Cookie。')
+  }
+
+  const response = await fetch(url, {
+    method,
+    headers: {
+      cookie,
+      accept: '*/*',
+      referer: 'https://pan.quark.cn/',
+      'user-agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
+      ...headers,
+    },
+  })
+
+  const buffer = Buffer.from(await response.arrayBuffer())
+  if (!response.ok) {
+    throw new Error(`夸克文件请求失败：HTTP ${response.status}`)
+  }
+
+  return {
+    buffer,
+    contentType: String(response.headers.get('content-type') || 'application/octet-stream'),
+  }
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -501,6 +542,60 @@ const collectVideosInFolder = async ({ userDataPath, folderFid }) => {
   return rows
 }
 
+const collectImagesInFolder = async ({ userDataPath, folderFid }) => {
+  const rows = []
+  const stack = [{ fid: folderFid, depth: 0 }]
+
+  while (stack.length > 0) {
+    const current = stack.pop()
+    let page = 1
+    let total = 0
+
+    while (true) {
+      const payload = await listChildren({
+        userDataPath,
+        pdirFid: current.fid,
+        page,
+      })
+      const data = payload.data || {}
+      const list = Array.isArray(data.list) ? data.list : []
+      total = Number(data.total || total)
+
+      for (const item of list) {
+        const fid = normalize(item.fid)
+        if (!fid) {
+          continue
+        }
+
+        if (isDirectory(item)) {
+          stack.push({ fid, depth: current.depth + 1 })
+          continue
+        }
+
+        if (!isImageFile(item)) {
+          continue
+        }
+
+        rows.push({
+          fid,
+          pdirFid: normalize(item.pdir_fid || current.fid),
+          fileName: normalize(item.file_name),
+          fileSize: Number(item.size || item.file_size || 0),
+          updatedAt: item.updated_at || item.l_updated_at || Date.now(),
+          depth: current.depth,
+        })
+      }
+
+      if (list.length === 0 || page * 200 >= total) {
+        break
+      }
+      page += 1
+    }
+  }
+
+  return rows
+}
+
 const fetchDownloadInfoByFids = async ({ userDataPath, fids }) => {
   if (!Array.isArray(fids) || fids.length === 0) {
     return []
@@ -541,6 +636,7 @@ const extractPreviewUrlFromPlayInfo = (playInfo) => {
 module.exports = {
   buildAutoSavePath,
   collectFoldersByCode,
+  collectImagesInFolder,
   collectVideosInFolder,
   extractPreviewUrlFromPlayInfo,
   fetchDownloadInfoByFids,
@@ -550,6 +646,7 @@ module.exports = {
   listShareChildren,
   mkdirByPath,
   parseShareUrl,
+  requestBuffer,
   resolveQuarkCookie,
   saveShareToDrive,
   saveQuarkCookie,

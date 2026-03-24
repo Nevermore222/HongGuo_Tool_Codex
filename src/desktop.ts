@@ -162,6 +162,9 @@ export type ShortDramaTableEntry = {
   save_completed_at: string
   save_error: string
   saved_root_fid: string
+  cover_file_id: string
+  cover_file_name: string
+  cover_url: string
   episode_count: number
   ready_episode_count: number
   updated_at: string
@@ -207,6 +210,9 @@ export type ShortDramaSaveRequestResult = {
   completedAt: string
   errorMessage: string
   savedRootFid: string
+  coverFileId: string
+  coverFileName: string
+  coverUrl: string
   episodeCount: number
   readyEpisodeCount: number
 }

@@ -13,6 +13,7 @@ import type {
   ShortDramaImportSummary,
   ShortDramaEpisodeEntry,
   ShortDramaEpisodeSyncResult,
+  ShortDramaSaveRequestResult,
   ShortDramaTableSnapshot,
 } from './desktop'
 import type { DiscoveredSeriesRecord } from './discoveredSources'
@@ -58,9 +59,18 @@ type DesktopApi = {
     dramaCode: string
     dramaTitle: string
   }) => Promise<ShortDramaEpisodeSyncResult>
+  getShortDramaSaveRequest: (input: {
+    dramaCode: string
+  }) => Promise<ShortDramaSaveRequestResult | null>
+  requestShortDramaSave: (input: {
+    dramaCode: string
+  }) => Promise<ShortDramaSaveRequestResult | null>
   getShortDramaEpisodes: (input: {
     dramaCode: string
   }) => Promise<ShortDramaEpisodeEntry[]>
+  getShortDramaCoverDataUrl: (input: {
+    dramaCode: string
+  }) => Promise<string>
   refreshShortDramaEpisodeLink: (input: {
     dramaCode: string
     episodeIndex: number

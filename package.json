@@ -24,6 +24,7 @@
     "dist:win:client": "npm run build:client && electron-builder --win nsis",
     "dist:win:admin": "npm run build:admin && electron-builder --win nsis",
     "lint": "eslint .",
+    "short-drama:prefetch-top": "node scripts/prefetch_short_drama_top.cjs",
     "preview": "vite preview"
   },
   "dependencies": {

@@ -26,7 +26,11 @@ contextBridge.exposeInMainWorld('desktopApi', {
   getShortDramaTableRows: (input) => ipcRenderer.invoke('short-drama:list-table', input),
   saveQuarkCookie: (input) => ipcRenderer.invoke('short-drama:save-cookie', input),
   syncShortDramaEpisodes: (input) => ipcRenderer.invoke('short-drama:sync-episodes', input),
+  getShortDramaSaveRequest: (input) => ipcRenderer.invoke('short-drama:get-save-request', input),
+  requestShortDramaSave: (input) => ipcRenderer.invoke('short-drama:request-save', input),
   getShortDramaEpisodes: (input) => ipcRenderer.invoke('short-drama:list-episodes', input),
+  getShortDramaCoverDataUrl: (input) =>
+    ipcRenderer.invoke('short-drama:get-cover-data-url', input),
   refreshShortDramaEpisodeLink: (input) =>
     ipcRenderer.invoke('short-drama:refresh-episode-link', input),
   getPlayablePreviewUrl: (input) =>

@@ -3,10 +3,12 @@ const { DatabaseSync } = require('node:sqlite')
 const yauzl = require('yauzl')
 const {
   collectFoldersByCode,
+  collectImagesInFolder,
   collectVideosInFolder,
   extractPreviewUrlFromPlayInfo,
   fetchDownloadInfoByFids,
   fetchPlayInfo,
+  requestBuffer,
 } = require('./quarkDrive.cjs')
 
 const defaultSheetName = '表格视图'
@@ -15,6 +17,7 @@ const shortDramaAdapterId = 'short-drama-library'
 const shortDramaDescription = '由短剧查询 Excel 模板导入的网盘资源索引，支持重复导入自动更新。'
 const shortDramaNotePrefix = '短剧查询模板导入记录'
 const shortDramaPosterGradient = 'linear-gradient(160deg, #1f2937 0%, #0f766e 100%)'
+const shortDramaCoverTableName = 'short_drama_cover_cache'
 
 const getShortDramaDbPath = (userDataPath) =>
   path.join(userDataPath, 'short-drama-library.db')
@@ -494,6 +497,9 @@ const ensureDatabaseSchema = (db) => {
       save_completed_at TEXT NOT NULL DEFAULT '',
       save_error TEXT NOT NULL DEFAULT '',
       saved_root_fid TEXT NOT NULL DEFAULT '',
+      cover_file_id TEXT NOT NULL DEFAULT '',
+      cover_file_name TEXT NOT NULL DEFAULT '',
+      cover_url TEXT NOT NULL DEFAULT '',
       imported_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -534,6 +540,15 @@ const ensureDatabaseSchema = (db) => {
 
     CREATE INDEX IF NOT EXISTS idx_short_drama_episode_code
       ON short_drama_episodes (drama_code, episode_index);
+
+    CREATE TABLE IF NOT EXISTS short_drama_cover_cache (
+      drama_code TEXT PRIMARY KEY,
+      mime_type TEXT NOT NULL DEFAULT '',
+      image_blob BLOB NOT NULL,
+      source_file_id TEXT NOT NULL DEFAULT '',
+      source_file_name TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL
+    );
   `)
 
   ensureTableColumn(db, 'short_drama_import_batches', 'removed_rows', 'INTEGER NOT NULL DEFAULT 0')
@@ -543,6 +558,105 @@ const ensureDatabaseSchema = (db) => {
   ensureTableColumn(db, 'short_drama_resources', 'save_completed_at', "TEXT NOT NULL DEFAULT ''")
   ensureTableColumn(db, 'short_drama_resources', 'save_error', "TEXT NOT NULL DEFAULT ''")
   ensureTableColumn(db, 'short_drama_resources', 'saved_root_fid', "TEXT NOT NULL DEFAULT ''")
+  ensureTableColumn(db, 'short_drama_resources', 'cover_file_id', "TEXT NOT NULL DEFAULT ''")
+  ensureTableColumn(db, 'short_drama_resources', 'cover_file_name', "TEXT NOT NULL DEFAULT ''")
+  ensureTableColumn(db, 'short_drama_resources', 'cover_url', "TEXT NOT NULL DEFAULT ''")
+}
+
+const scoreCoverCandidate = (item) => {
+  const name = String(item?.fileName || '').toLowerCase()
+  let score = 0
+  if (/^(0+|cover|poster|fm|thumb)/.test(name)) {
+    score -= 50
+  }
+  if (name.includes('封面') || name.includes('海报')) {
+    score -= 60
+  }
+  score += Number(item?.depth || 0) * 20
+  score += Number(item?.fileSize || 0) > 0 ? Math.max(0, 2_000_000 - Number(item.fileSize)) / 100_000 : 0
+  score += name.localeCompare('')
+  return score
+}
+
+const pickBestCoverImage = (images) =>
+  [...images].sort((left, right) => scoreCoverCandidate(left) - scoreCoverCandidate(right))[0] || null
+
+const cacheShortDramaCover = ({ userDataPath, dramaCode, coverFileId, coverFileName, coverUrl }) => {
+  const code = String(dramaCode || '').trim()
+  if (!code || !coverUrl) {
+    return Promise.resolve(null)
+  }
+
+  return requestBuffer({
+    userDataPath,
+    url: coverUrl,
+  }).then(({ buffer, contentType }) => {
+    const db = new DatabaseSync(getShortDramaDbPath(userDataPath))
+    try {
+      ensureDatabaseSchema(db)
+      db.prepare(
+        `
+        INSERT INTO ${shortDramaCoverTableName} (
+          drama_code, mime_type, image_blob, source_file_id, source_file_name, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(drama_code) DO UPDATE SET
+          mime_type = excluded.mime_type,
+          image_blob = excluded.image_blob,
+          source_file_id = excluded.source_file_id,
+          source_file_name = excluded.source_file_name,
+          updated_at = excluded.updated_at
+      `,
+      ).run(
+        code,
+        String(contentType || 'image/jpeg'),
+        buffer,
+        String(coverFileId || ''),
+        String(coverFileName || ''),
+        new Date().toISOString(),
+      )
+      return {
+        dramaCode: code,
+        mimeType: String(contentType || 'image/jpeg'),
+        imageBuffer: buffer,
+      }
+    } finally {
+      db.close()
+    }
+  })
+}
+
+const getShortDramaCoverCache = ({ userDataPath, dramaCode }) => {
+  const code = String(dramaCode || '').trim()
+  if (!code) {
+    return null
+  }
+
+  const db = new DatabaseSync(getShortDramaDbPath(userDataPath))
+  try {
+    ensureDatabaseSchema(db)
+    return (
+      db.prepare(
+        `
+        SELECT drama_code, mime_type, image_blob, source_file_id, source_file_name, updated_at
+        FROM ${shortDramaCoverTableName}
+        WHERE drama_code = ?
+      `,
+      ).get(code) || null
+    )
+  } finally {
+    db.close()
+  }
+}
+
+const getShortDramaCoverDataUrl = ({ userDataPath, dramaCode }) => {
+  const row = getShortDramaCoverCache({ userDataPath, dramaCode })
+  if (!row?.image_blob) {
+    return ''
+  }
+  const mimeType = String(row.mime_type || 'image/jpeg')
+  const buffer = Buffer.isBuffer(row.image_blob) ? row.image_blob : Buffer.from(row.image_blob)
+  return `data:${mimeType};base64,${buffer.toString('base64')}`
 }
 
 const hashString = (value) => {
@@ -704,6 +818,9 @@ const getShortDramaResource = ({ userDataPath, dramaCode }) => {
         save_completed_at,
         save_error,
         saved_root_fid,
+        cover_file_id,
+        cover_file_name,
+        cover_url,
         updated_at
       FROM short_drama_resources
       WHERE drama_code = ?
@@ -724,6 +841,9 @@ const buildShortDramaSaveSnapshot = ({ resource, episodeCount = 0, readyEpisodeC
   completedAt: String(resource?.save_completed_at || ''),
   errorMessage: String(resource?.save_error || ''),
   savedRootFid: String(resource?.saved_root_fid || ''),
+  coverFileId: String(resource?.cover_file_id || ''),
+  coverFileName: String(resource?.cover_file_name || ''),
+  coverUrl: String(resource?.cover_url || ''),
   episodeCount: Number(episodeCount || 0),
   readyEpisodeCount: Number(readyEpisodeCount || 0),
 })
@@ -774,6 +894,7 @@ const updateShortDramaSaveState = ({ userDataPath, dramaCode, patch }) => {
         .prepare(
           `
       SELECT save_status, save_requested_at, save_completed_at, save_error, saved_root_fid
+           , cover_file_id, cover_file_name, cover_url
       FROM short_drama_resources
       WHERE drama_code = ?
     `,
@@ -793,6 +914,9 @@ const updateShortDramaSaveState = ({ userDataPath, dramaCode, patch }) => {
         save_completed_at = ?,
         save_error = ?,
         saved_root_fid = ?,
+        cover_file_id = ?,
+        cover_file_name = ?,
+        cover_url = ?,
         updated_at = ?
       WHERE drama_code = ?
     `,
@@ -802,6 +926,9 @@ const updateShortDramaSaveState = ({ userDataPath, dramaCode, patch }) => {
       patch.saveCompletedAt ?? current.save_completed_at,
       patch.saveError ?? current.save_error,
       patch.savedRootFid ?? current.saved_root_fid,
+      patch.coverFileId ?? current.cover_file_id,
+      patch.coverFileName ?? current.cover_file_name,
+      patch.coverUrl ?? current.cover_url,
       new Date().toISOString(),
       code,
     )
@@ -847,6 +974,9 @@ const listShortDramaTableRows = ({ userDataPath, limit = 500, offset = 0 }) => {
         save_completed_at,
         save_error,
         saved_root_fid,
+        cover_file_id,
+        cover_file_name,
+        cover_url,
         (
           SELECT COUNT(1)
           FROM short_drama_episodes AS episodes
@@ -1050,6 +1180,10 @@ const syncShortDramaEpisodesFromQuark = async ({
   }
 
   const folder = folders[0]
+  const images = await collectImagesInFolder({
+    userDataPath,
+    folderFid: folder.fid,
+  })
   const videos = await collectVideosInFolder({
     userDataPath,
     folderFid: folder.fid,
@@ -1069,6 +1203,26 @@ const syncShortDramaEpisodesFromQuark = async ({
     fids,
   })
   const downloadInfoMap = new Map(downloadInfos.map((item) => [String(item.fid || ''), item]))
+  const firstCoverImage = pickBestCoverImage(images)
+  let coverUrl = ''
+  if (firstCoverImage?.fid) {
+    const [coverInfo] = await fetchDownloadInfoByFids({
+      userDataPath,
+      fids: [firstCoverImage.fid],
+    })
+    coverUrl = String(coverInfo?.download_url || '')
+    if (coverUrl) {
+      try {
+        await cacheShortDramaCover({
+          userDataPath,
+          dramaCode: code,
+          coverFileId: firstCoverImage.fid,
+          coverFileName: firstCoverImage.fileName,
+          coverUrl,
+        })
+      } catch {}
+    }
+  }
 
   const db = new DatabaseSync(getShortDramaDbPath(userDataPath))
   const now = new Date().toISOString()
@@ -1092,6 +1246,15 @@ const syncShortDramaEpisodesFromQuark = async ({
         url_expire_at = excluded.url_expire_at,
         status = excluded.status,
         updated_at = excluded.updated_at
+    `)
+    const updateResourceCover = db.prepare(`
+      UPDATE short_drama_resources
+      SET
+        cover_file_id = ?,
+        cover_file_name = ?,
+        cover_url = ?,
+        updated_at = ?
+      WHERE drama_code = ?
     `)
 
     db.exec('BEGIN')
@@ -1124,6 +1287,14 @@ const syncShortDramaEpisodesFromQuark = async ({
         )
       }
 
+      updateResourceCover.run(
+        String(firstCoverImage?.fid || ''),
+        String(firstCoverImage?.fileName || ''),
+        coverUrl,
+        now,
+        code,
+      )
+
       db.exec('COMMIT')
     } catch (error) {
       db.exec('ROLLBACK')
@@ -1139,6 +1310,9 @@ const syncShortDramaEpisodesFromQuark = async ({
         saveCompletedAt: now,
         saveError: '',
         savedRootFid: folder.fid,
+        coverFileId: String(firstCoverImage?.fid || ''),
+        coverFileName: String(firstCoverImage?.fileName || ''),
+        coverUrl,
       },
     })
     return {
@@ -1241,6 +1415,8 @@ const refreshShortDramaEpisodeLink = async ({ userDataPath, dramaCode, episodeIn
 module.exports = {
   getShortDramaDbPath,
   getShortDramaResource,
+  getShortDramaCoverCache,
+  getShortDramaCoverDataUrl,
   getShortDramaSaveRequest,
   importShortDramaWorkbook,
   listShortDramaDiscoveredSeries,
@@ -1248,6 +1424,7 @@ module.exports = {
   listShortDramaTableRows,
   listShortDramaEpisodes,
   requestShortDramaSave,
+  cacheShortDramaCover,
   syncShortDramaEpisodesFromQuark,
   updateShortDramaSaveState,
   refreshShortDramaEpisodeLink,
