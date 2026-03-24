@@ -12,8 +12,21 @@ export type DesktopSettings = {
   downloadDirectory: string
   maxConcurrentDownloads: number
   preferredResolution: Resolution
+  remoteServiceEnabled: boolean
+  remoteServicePort: number
+  remoteServiceToken: string
+  remoteClientBaseUrl: string
+  remoteClientToken: string
   updatedAt: string
 }
+
+export type ShortDramaSaveStatus =
+  | 'idle'
+  | 'pending'
+  | 'processing'
+  | 'waiting_save'
+  | 'ready'
+  | 'failed'
 
 export type DesktopDownloadStatus =
   | '等待中'
@@ -144,6 +157,13 @@ export type ShortDramaTableEntry = {
   drama_name: string
   quark_url: string
   baidu_url: string
+  save_status: ShortDramaSaveStatus
+  save_requested_at: string
+  save_completed_at: string
+  save_error: string
+  saved_root_fid: string
+  episode_count: number
+  ready_episode_count: number
   updated_at: string
 }
 
@@ -173,9 +193,22 @@ export type ShortDramaEpisodeSyncResult = {
   dramaCode: string
   dramaTitle: string
   folderName: string
+  folderFid: string
   syncedEpisodes: number
   readyEpisodes: number
   episodes: ShortDramaEpisodeEntry[]
+}
+
+export type ShortDramaSaveRequestResult = {
+  dramaCode: string
+  dramaTitle: string
+  status: ShortDramaSaveStatus
+  requestedAt: string
+  completedAt: string
+  errorMessage: string
+  savedRootFid: string
+  episodeCount: number
+  readyEpisodeCount: number
 }
 
 export const fallbackDesktopContext: DesktopContext = {
@@ -189,6 +222,11 @@ export const fallbackDesktopSettings: DesktopSettings = {
   downloadDirectory: '未选择下载目录',
   maxConcurrentDownloads: 3,
   preferredResolution: '720p',
+  remoteServiceEnabled: false,
+  remoteServicePort: 39095,
+  remoteServiceToken: '',
+  remoteClientBaseUrl: '',
+  remoteClientToken: '',
   updatedAt: '',
 }
 

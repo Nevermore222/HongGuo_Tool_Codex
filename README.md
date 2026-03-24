@@ -33,9 +33,29 @@ npm run dev:desktop
 ```
 
 说明：
+- `npm run dev:desktop` 默认启动简洁客户端界面，适合发给朋友使用。
+- `npm run dev:desktop:admin` 启动完整管理端界面，仅用于你本机维护数据。
 - `npm run dev` 只启动浏览器预览，不会读取 Electron `userData` 下的数据库。
 - 请使用 `npm run dev:desktop` 运行桌面模式，才能使用 Excel 导入和数据库功能。
 - `npm run dev:electron` 已内置 `NODE_OPTIONS=--max-old-space-size=8192`，用于避免开发态长任务导致的 V8 堆内存不足。
+
+## 客户端 / 管理端联动
+
+当前已支持两种角色：
+- 客户端：默认简洁界面，只展示短剧列表、分集、预览、下载和下载队列。
+- 管理端：完整界面，负责 Excel 导入、夸克 Cookie、同步分集，以及向客户端提供远程 HTTP 服务。
+
+推荐流程：
+1. 你的电脑运行管理端：`npm run dev:desktop:admin`
+2. 在管理端桌面设置里开启“管理端远程服务”，设置端口和访问令牌
+3. 朋友电脑运行客户端：`npm run dev:desktop`
+4. 客户端顶部填写你的管理端地址，例如 `http://192.168.1.8:39095`
+5. 客户端点进某部短剧详情时，如果管理端还没有这部剧的已同步分集，会自动向管理端发起“请求准备资源”
+6. 管理端会优先尝试从你自己的夸克网盘中查找并同步；若尚未转存到你的盘内，则会自动根据 Excel 中记录的夸克分享链接执行一次转存，再同步分集
+
+说明：
+- 客户端预览和下载已改为走管理端的媒体代理，不再依赖朋友本机保存夸克 Cookie。
+- 当分享链接失效、缺少提取码、或夸克接口返回异常时，状态会进入 `waiting_save` 或 `failed`，客户端会显示失败原因。
 
 ## Excel 导入流程
 
@@ -126,10 +146,13 @@ node scripts/export_quark_manifest.mjs
 ```bash
 npm run dev
 npm run dev:desktop
+npm run dev:desktop:admin
 npm run build
+npm run build:admin
 npm run lint
 npm run build:desktop
 npm run dist:win
+npm run dist:win:admin
 ```
 
 ## 关键文件

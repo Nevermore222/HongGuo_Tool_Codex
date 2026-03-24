@@ -7,15 +7,19 @@ const path = require('node:path')
 const { pipeline } = require('node:stream/promises')
 const { fileURLToPath, URL } = require('node:url')
 const {
+  getShortDramaResource,
+  getShortDramaSaveRequest,
   importShortDramaWorkbook,
   listShortDramaImportBatches,
   listShortDramaEpisodes,
   listShortDramaDiscoveredSeries,
   listShortDramaTableRows,
+  requestShortDramaSave,
   refreshShortDramaEpisodeLink,
   syncShortDramaEpisodesFromQuark,
+  updateShortDramaSaveState,
 } = require('./shortDramaImport.cjs')
-const { resolveQuarkCookie, saveQuarkCookie } = require('./quarkDrive.cjs')
+const { resolveQuarkCookie, saveQuarkCookie, saveShareToDrive } = require('./quarkDrive.cjs')
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL)
 const downloadTasks = new Map()
@@ -32,11 +36,18 @@ const maxDownloadLogs = 2000
 const maxDiscoveryHistoryEntries = 200
 let quarkPreviewProxyServer = null
 let quarkPreviewProxyPort = 0
+let remoteAdminServer = null
+const processingSaveRequests = new Set()
 
 const defaultSettings = () => ({
   downloadDirectory: app.getPath('downloads'),
   maxConcurrentDownloads: 3,
   preferredResolution: '720p',
+  remoteServiceEnabled: false,
+  remoteServicePort: 39095,
+  remoteServiceToken: '',
+  remoteClientBaseUrl: '',
+  remoteClientToken: '',
   updatedAt: new Date().toISOString(),
 })
 
@@ -743,6 +754,225 @@ const buildQuarkPreviewProxyUrl = async (sourceUrl) => {
   return `http://127.0.0.1:${port}/quark-media?target=${encodeURIComponent(raw)}`
 }
 
+const normalizeBaseUrl = (value) => String(value || '').trim().replace(/\/+$/, '')
+const buildRemoteMediaProxyUrl = ({ baseUrl, token, sourceUrl }) => {
+  const base = normalizeBaseUrl(baseUrl)
+  const search = new URLSearchParams({
+    target: String(sourceUrl || ''),
+  })
+  if (token) {
+    search.set('access_token', token)
+  }
+  return `${base}/api/quark-media?${search.toString()}`
+}
+
+const sendJson = (res, statusCode, payload) => {
+  res.writeHead(statusCode, {
+    'content-type': 'application/json; charset=utf-8',
+    'access-control-allow-origin': '*',
+    'access-control-allow-headers': 'content-type, authorization',
+    'access-control-allow-methods': 'GET, POST, OPTIONS',
+  })
+  res.end(JSON.stringify(payload))
+}
+
+const readRequestBody = async (req) => {
+  const chunks = []
+  for await (const chunk of req) {
+    chunks.push(chunk)
+  }
+  if (chunks.length === 0) {
+    return {}
+  }
+  const raw = Buffer.concat(chunks).toString('utf8')
+  return raw ? JSON.parse(raw) : {}
+}
+
+const isFolderNotFoundError = (error) => {
+  const message = error instanceof Error ? error.message : String(error || '')
+  return message.includes('目录') || message.includes('夸克网盘') || message.includes('folder')
+}
+
+const processShortDramaSaveRequest = async (dramaCode) => {
+  const code = String(dramaCode || '').trim()
+  if (!code || processingSaveRequests.has(code)) {
+    return
+  }
+
+  processingSaveRequests.add(code)
+  try {
+    const resource = getShortDramaResource({
+      userDataPath: app.getPath('userData'),
+      dramaCode: code,
+    })
+    if (!resource) {
+      return
+    }
+
+    updateShortDramaSaveState({
+      userDataPath: app.getPath('userData'),
+      dramaCode: code,
+      patch: {
+        saveStatus: 'processing',
+        saveError: '',
+      },
+    })
+
+    try {
+      await syncShortDramaEpisodesFromQuark({
+        userDataPath: app.getPath('userData'),
+        dramaCode: code,
+        dramaTitle: resource.drama_title || resource.drama_name || code,
+      })
+      return
+    } catch (error) {
+      if (!isFolderNotFoundError(error) || !String(resource.quark_url || '').trim()) {
+        throw error
+      }
+    }
+
+    await saveShareToDrive({
+      userDataPath: app.getPath('userData'),
+      shareUrl: String(resource.quark_url || ''),
+      dramaCode: code,
+      dramaTitle: resource.drama_title || resource.drama_name || code,
+    })
+
+    await syncShortDramaEpisodesFromQuark({
+      userDataPath: app.getPath('userData'),
+      dramaCode: code,
+      dramaTitle: resource.drama_title || resource.drama_name || code,
+    })
+  } catch (error) {
+    updateShortDramaSaveState({
+      userDataPath: app.getPath('userData'),
+      dramaCode: code,
+      patch: {
+        saveStatus: isFolderNotFoundError(error) ? 'waiting_save' : 'failed',
+        saveError: error instanceof Error ? error.message : '处理保存请求失败。',
+      },
+    })
+  } finally {
+    processingSaveRequests.delete(code)
+  }
+}
+
+const startRemoteAdminService = async () => {
+  const settings = await ensureSettings()
+  if (!settings.remoteServiceEnabled) {
+    if (remoteAdminServer) {
+      await new Promise((resolve) => remoteAdminServer.close(resolve))
+      remoteAdminServer = null
+    }
+    return
+  }
+
+  const port = Math.max(1024, Number(settings.remoteServicePort || 39095))
+  if (remoteAdminServer) {
+    const address = remoteAdminServer.address()
+    if (address && typeof address !== 'string' && address.port === port) {
+      return
+    }
+    await new Promise((resolve) => remoteAdminServer.close(resolve))
+    remoteAdminServer = null
+  }
+
+  remoteAdminServer = http.createServer(async (req, res) => {
+    try {
+      const requestUrl = new URL(req.url || '/', `http://127.0.0.1:${port}`)
+      const pathname = requestUrl.pathname
+      if (req.method === 'OPTIONS') {
+        sendJson(res, 204, {})
+        return
+      }
+
+      const token = String(settings.remoteServiceToken || '').trim()
+      if (token) {
+        const auth = String(req.headers.authorization || '')
+        const queryToken = String(requestUrl.searchParams.get('access_token') || '')
+        if (auth !== `Bearer ${token}` && queryToken !== token) {
+          sendJson(res, 401, { error: 'unauthorized' })
+          return
+        }
+      }
+
+      if (req.method === 'GET' && pathname === '/api/health') {
+        sendJson(res, 200, { ok: true, service: 'hongguo-admin', port })
+        return
+      }
+
+      if (req.method === 'GET' && pathname === '/api/quark-media') {
+        const target = String(requestUrl.searchParams.get('target') || '')
+        if (!target) {
+          sendJson(res, 400, { error: 'missing target' })
+          return
+        }
+        await streamQuarkMedia({ targetUrl: target, req, res })
+        return
+      }
+
+      if (req.method === 'GET' && pathname === '/api/short-dramas') {
+        const limit = Number(requestUrl.searchParams.get('limit') || 500)
+        const offset = Number(requestUrl.searchParams.get('offset') || 0)
+        sendJson(res, 200, listShortDramaTableRows({
+          userDataPath: app.getPath('userData'),
+          limit,
+          offset,
+        }))
+        return
+      }
+
+      const matchedCode = /^\/api\/short-dramas\/([^/]+)(?:\/(episodes|request))?$/.exec(pathname)
+      if (matchedCode) {
+        const dramaCode = decodeURIComponent(matchedCode[1] || '')
+        const action = matchedCode[2] || ''
+
+        if (req.method === 'GET' && action === 'episodes') {
+          sendJson(res, 200, listShortDramaEpisodes({
+            userDataPath: app.getPath('userData'),
+            dramaCode,
+          }))
+          return
+        }
+
+        if (req.method === 'GET' && action === 'request') {
+          sendJson(res, 200, getShortDramaSaveRequest({
+            userDataPath: app.getPath('userData'),
+            dramaCode,
+          }))
+          return
+        }
+
+        if (req.method === 'POST' && action === 'request') {
+          const body = await readRequestBody(req)
+          const snapshot = requestShortDramaSave({
+            userDataPath: app.getPath('userData'),
+            dramaCode,
+            requester: body?.requester,
+          })
+          void processShortDramaSaveRequest(dramaCode)
+          sendJson(res, 202, snapshot)
+          return
+        }
+      }
+
+      sendJson(res, 404, { error: 'not_found' })
+    } catch (error) {
+      sendJson(res, 500, {
+        error: error instanceof Error ? error.message : 'internal_error',
+      })
+    }
+  })
+
+  await new Promise((resolve, reject) => {
+    remoteAdminServer.once('error', reject)
+    remoteAdminServer.listen(port, '0.0.0.0', () => {
+      remoteAdminServer.off('error', reject)
+      resolve()
+    })
+  })
+}
+
 const downloadLocalFile = async (sourcePath, outputPath, task, signal) => {
   const stats = await fsp.stat(sourcePath)
   const offset = task.transferredBytes
@@ -1053,6 +1283,7 @@ ipcMain.handle('settings:read', async () => ensureSettings())
 
 ipcMain.handle('settings:update', async (_event, patch) => {
   const next = await writeSettings(patch)
+  await startRemoteAdminService()
   void maybeStartDownloads()
   return next
 })
@@ -1168,6 +1399,23 @@ ipcMain.handle('short-drama:sync-episodes', async (_event, input) =>
     dramaTitle: String(input?.dramaTitle || ''),
   }),
 )
+
+ipcMain.handle('short-drama:get-save-request', async (_event, input) =>
+  getShortDramaSaveRequest({
+    userDataPath: app.getPath('userData'),
+    dramaCode: String(input?.dramaCode || ''),
+  }),
+)
+
+ipcMain.handle('short-drama:request-save', async (_event, input) => {
+  const dramaCode = String(input?.dramaCode || '')
+  const snapshot = requestShortDramaSave({
+    userDataPath: app.getPath('userData'),
+    dramaCode,
+  })
+  void processShortDramaSaveRequest(dramaCode)
+  return snapshot
+})
 
 ipcMain.handle('short-drama:list-episodes', async (_event, input) =>
   listShortDramaEpisodes({
@@ -1397,6 +1645,7 @@ ipcMain.handle('downloads:show-in-folder', async (_event, taskId) => {
 
 app.whenReady().then(async () => {
   await ensureSettings()
+  await startRemoteAdminService()
   await restoreDownloadLogs()
   await restoreDiscoverySyncHistory()
   await restoreDownloadTasks()
@@ -1433,6 +1682,10 @@ app.on('before-quit', () => {
     quarkPreviewProxyServer.close()
     quarkPreviewProxyServer = null
     quarkPreviewProxyPort = 0
+  }
+  if (remoteAdminServer) {
+    remoteAdminServer.close()
+    remoteAdminServer = null
   }
   void persistDownloadTasks()
   void persistDownloadLogs()

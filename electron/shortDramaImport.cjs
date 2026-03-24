@@ -489,6 +489,11 @@ const ensureDatabaseSchema = (db) => {
       source_sheet TEXT NOT NULL DEFAULT '',
       source_row INTEGER NOT NULL DEFAULT 0,
       source_file TEXT NOT NULL DEFAULT '',
+      save_status TEXT NOT NULL DEFAULT 'idle',
+      save_requested_at TEXT NOT NULL DEFAULT '',
+      save_completed_at TEXT NOT NULL DEFAULT '',
+      save_error TEXT NOT NULL DEFAULT '',
+      saved_root_fid TEXT NOT NULL DEFAULT '',
       imported_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -533,6 +538,11 @@ const ensureDatabaseSchema = (db) => {
 
   ensureTableColumn(db, 'short_drama_import_batches', 'removed_rows', 'INTEGER NOT NULL DEFAULT 0')
   ensureTableColumn(db, 'short_drama_import_batches', 'sync_mode', "TEXT NOT NULL DEFAULT 'replace'")
+  ensureTableColumn(db, 'short_drama_resources', 'save_status', "TEXT NOT NULL DEFAULT 'idle'")
+  ensureTableColumn(db, 'short_drama_resources', 'save_requested_at', "TEXT NOT NULL DEFAULT ''")
+  ensureTableColumn(db, 'short_drama_resources', 'save_completed_at', "TEXT NOT NULL DEFAULT ''")
+  ensureTableColumn(db, 'short_drama_resources', 'save_error', "TEXT NOT NULL DEFAULT ''")
+  ensureTableColumn(db, 'short_drama_resources', 'saved_root_fid', "TEXT NOT NULL DEFAULT ''")
 }
 
 const hashString = (value) => {
@@ -670,6 +680,157 @@ const listShortDramaEpisodes = ({ userDataPath, dramaCode }) => {
   }
 }
 
+const getShortDramaResource = ({ userDataPath, dramaCode }) => {
+  const code = String(dramaCode || '').trim()
+  if (!code) {
+    return null
+  }
+
+  const db = new DatabaseSync(getShortDramaDbPath(userDataPath))
+  try {
+    ensureDatabaseSchema(db)
+    return (
+      db
+        .prepare(
+          `
+      SELECT
+        drama_code,
+        drama_name,
+        drama_title,
+        quark_url,
+        baidu_url,
+        save_status,
+        save_requested_at,
+        save_completed_at,
+        save_error,
+        saved_root_fid,
+        updated_at
+      FROM short_drama_resources
+      WHERE drama_code = ?
+    `,
+        )
+        .get(code) || null
+    )
+  } finally {
+    db.close()
+  }
+}
+
+const buildShortDramaSaveSnapshot = ({ resource, episodeCount = 0, readyEpisodeCount = 0 }) => ({
+  dramaCode: String(resource?.drama_code || ''),
+  dramaTitle: String(resource?.drama_title || resource?.drama_name || ''),
+  status: String(resource?.save_status || 'idle'),
+  requestedAt: String(resource?.save_requested_at || ''),
+  completedAt: String(resource?.save_completed_at || ''),
+  errorMessage: String(resource?.save_error || ''),
+  savedRootFid: String(resource?.saved_root_fid || ''),
+  episodeCount: Number(episodeCount || 0),
+  readyEpisodeCount: Number(readyEpisodeCount || 0),
+})
+
+const getShortDramaSaveRequest = ({ userDataPath, dramaCode }) => {
+  const resource = getShortDramaResource({ userDataPath, dramaCode })
+  if (!resource) {
+    return null
+  }
+
+  const db = new DatabaseSync(getShortDramaDbPath(userDataPath))
+  try {
+    ensureDatabaseSchema(db)
+    const counts =
+      db
+        .prepare(
+          `
+      SELECT
+        COUNT(1) AS episode_count,
+        SUM(CASE WHEN download_url <> '' THEN 1 ELSE 0 END) AS ready_episode_count
+      FROM short_drama_episodes
+      WHERE drama_code = ?
+    `,
+        )
+        .get(String(resource.drama_code || '')) || {}
+
+    return buildShortDramaSaveSnapshot({
+      resource,
+      episodeCount: Number(counts.episode_count || 0),
+      readyEpisodeCount: Number(counts.ready_episode_count || 0),
+    })
+  } finally {
+    db.close()
+  }
+}
+
+const updateShortDramaSaveState = ({ userDataPath, dramaCode, patch }) => {
+  const code = String(dramaCode || '').trim()
+  if (!code) {
+    throw new Error('dramaCode 不能为空。')
+  }
+
+  const db = new DatabaseSync(getShortDramaDbPath(userDataPath))
+  try {
+    ensureDatabaseSchema(db)
+    const current =
+      db
+        .prepare(
+          `
+      SELECT save_status, save_requested_at, save_completed_at, save_error, saved_root_fid
+      FROM short_drama_resources
+      WHERE drama_code = ?
+    `,
+        )
+        .get(code) || null
+
+    if (!current) {
+      throw new Error(`未找到短剧 ${code}。`)
+    }
+
+    db.prepare(
+      `
+      UPDATE short_drama_resources
+      SET
+        save_status = ?,
+        save_requested_at = ?,
+        save_completed_at = ?,
+        save_error = ?,
+        saved_root_fid = ?,
+        updated_at = ?
+      WHERE drama_code = ?
+    `,
+    ).run(
+      patch.saveStatus ?? current.save_status,
+      patch.saveRequestedAt ?? current.save_requested_at,
+      patch.saveCompletedAt ?? current.save_completed_at,
+      patch.saveError ?? current.save_error,
+      patch.savedRootFid ?? current.saved_root_fid,
+      new Date().toISOString(),
+      code,
+    )
+  } finally {
+    db.close()
+  }
+}
+
+const requestShortDramaSave = ({ userDataPath, dramaCode }) => {
+  const resource = getShortDramaResource({ userDataPath, dramaCode })
+  if (!resource) {
+    throw new Error(`未找到短剧 ${dramaCode}。`)
+  }
+
+  const requestedAt = new Date().toISOString()
+  updateShortDramaSaveState({
+    userDataPath,
+    dramaCode,
+    patch: {
+      saveStatus: 'pending',
+      saveRequestedAt: requestedAt,
+      saveCompletedAt: '',
+      saveError: '',
+    },
+  })
+
+  return getShortDramaSaveRequest({ userDataPath, dramaCode })
+}
+
 const listShortDramaTableRows = ({ userDataPath, limit = 500, offset = 0 }) => {
   const db = new DatabaseSync(getShortDramaDbPath(userDataPath))
 
@@ -681,6 +842,22 @@ const listShortDramaTableRows = ({ userDataPath, limit = 500, offset = 0 }) => {
         drama_name,
         quark_url,
         baidu_url,
+        save_status,
+        save_requested_at,
+        save_completed_at,
+        save_error,
+        saved_root_fid,
+        (
+          SELECT COUNT(1)
+          FROM short_drama_episodes AS episodes
+          WHERE episodes.drama_code = short_drama_resources.drama_code
+        ) AS episode_count,
+        (
+          SELECT COUNT(1)
+          FROM short_drama_episodes AS episodes
+          WHERE episodes.drama_code = short_drama_resources.drama_code
+            AND episodes.download_url <> ''
+        ) AS ready_episode_count,
         updated_at
       FROM short_drama_resources
       ORDER BY CAST(drama_code AS INTEGER) DESC, id DESC
@@ -954,10 +1131,21 @@ const syncShortDramaEpisodesFromQuark = async ({
     }
 
     const episodes = listShortDramaEpisodes({ userDataPath, dramaCode: code })
+    updateShortDramaSaveState({
+      userDataPath,
+      dramaCode: code,
+      patch: {
+        saveStatus: 'ready',
+        saveCompletedAt: now,
+        saveError: '',
+        savedRootFid: folder.fid,
+      },
+    })
     return {
       dramaCode: code,
       dramaTitle: title || folder.folderName,
       folderName: folder.folderName,
+      folderFid: folder.fid,
       syncedEpisodes: episodes.length,
       readyEpisodes: episodes.filter((item) => item.download_url).length,
       episodes,
@@ -1052,11 +1240,15 @@ const refreshShortDramaEpisodeLink = async ({ userDataPath, dramaCode, episodeIn
 
 module.exports = {
   getShortDramaDbPath,
+  getShortDramaResource,
+  getShortDramaSaveRequest,
   importShortDramaWorkbook,
   listShortDramaDiscoveredSeries,
   listShortDramaImportBatches,
   listShortDramaTableRows,
   listShortDramaEpisodes,
+  requestShortDramaSave,
   syncShortDramaEpisodesFromQuark,
+  updateShortDramaSaveState,
   refreshShortDramaEpisodeLink,
 }

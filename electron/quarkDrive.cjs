@@ -7,6 +7,8 @@ const getQuarkCookiePath = (userDataPath) =>
   path.join(userDataPath, 'quark-cookie.txt')
 
 const normalize = (value) => String(value || '').trim()
+const normalizePathSegment = (value) =>
+  normalize(value).replace(/[\\/:*?"<>|]/g, ' ').replace(/\s+/g, ' ').trim()
 
 const parseEpisodeIndex = (fileName) => {
   const text = normalize(fileName)
@@ -116,6 +118,8 @@ const requestJson = async ({ userDataPath, url, method = 'GET', body }) => {
   return payload
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
 const listChildren = async ({ userDataPath, pdirFid, page = 1, pageSize = 200 }) => {
   const query = new URLSearchParams({
     pr: 'ucpro',
@@ -128,6 +132,266 @@ const listChildren = async ({ userDataPath, pdirFid, page = 1, pageSize = 200 })
   })
   const url = `${quarkApiBase}/1/clouddrive/file/sort?${query.toString()}`
   return requestJson({ userDataPath, url })
+}
+
+const parseShareUrl = (shareUrl) => {
+  const raw = normalize(shareUrl)
+  const pwdMatch = /[?&]pwd=([^&#]+)/i.exec(raw)
+  const codeMatch = /\/s\/([A-Za-z0-9]+)/.exec(raw)
+  const pathMatches = [...raw.matchAll(/\/([a-f0-9]{32})(?:-[^/?#]+)?/gi)]
+  return {
+    pwdId: codeMatch?.[1] || '',
+    passcode: pwdMatch?.[1] || '',
+    pdirFid:
+      pathMatches.length > 0 ? String(pathMatches[pathMatches.length - 1]?.[1] || '0') : '0',
+  }
+}
+
+const getShareToken = async ({ userDataPath, pwdId, passcode = '' }) => {
+  const payload = await requestJson({
+    userDataPath,
+    url: `${quarkApiBase}/1/clouddrive/share/sharepage/token?pr=ucpro&fr=pc`,
+    method: 'POST',
+    body: {
+      pwd_id: pwdId,
+      passcode,
+    },
+  })
+
+  return String(payload?.data?.stoken || '')
+}
+
+const listShareChildren = async ({
+  userDataPath,
+  pwdId,
+  stoken,
+  pdirFid = '0',
+  pageSize = 50,
+}) => {
+  const rows = []
+  let page = 1
+
+  while (true) {
+    const query = new URLSearchParams({
+      pr: 'ucpro',
+      fr: 'pc',
+      pwd_id: String(pwdId),
+      stoken: String(stoken),
+      pdir_fid: String(pdirFid),
+      force: '0',
+      _page: String(page),
+      _size: String(pageSize),
+      _fetch_banner: '0',
+      _fetch_share: '0',
+      _fetch_total: '1',
+      _sort: 'file_type:asc,updated_at:desc',
+      ver: '2',
+      fetch_share_full_path: '0',
+    })
+    const payload = await requestJson({
+      userDataPath,
+      url: `${quarkApiBase}/1/clouddrive/share/sharepage/detail?${query.toString()}`,
+    })
+    const list = Array.isArray(payload?.data?.list) ? payload.data.list : []
+    rows.push(...list)
+    const total = Number(payload?.metadata?._total || rows.length)
+    if (list.length === 0 || rows.length >= total) {
+      break
+    }
+    page += 1
+  }
+
+  return rows
+}
+
+const getFidsByPaths = async ({ userDataPath, filePaths }) => {
+  const all = []
+  const remaining = [...filePaths]
+
+  while (remaining.length > 0) {
+    const payload = await requestJson({
+      userDataPath,
+      url: `${quarkApiBase}/1/clouddrive/file/info/path_list?pr=ucpro&fr=pc`,
+      method: 'POST',
+      body: {
+        file_path: remaining.splice(0, 50),
+        namespace: '0',
+      },
+    })
+    const rows = Array.isArray(payload?.data) ? payload.data : []
+    all.push(...rows)
+  }
+
+  return all
+}
+
+const mkdirByPath = async ({ userDataPath, dirPath }) => {
+  const payload = await requestJson({
+    userDataPath,
+    url: `${quarkApiBase}/1/clouddrive/file?pr=ucpro&fr=pc&uc_param_str=`,
+    method: 'POST',
+    body: {
+      pdir_fid: '0',
+      file_name: '',
+      dir_path: dirPath,
+      dir_init_lock: false,
+    },
+  })
+
+  return payload?.data || {}
+}
+
+const ensureSaveDirectory = async ({ userDataPath, dirPath }) => {
+  const normalizedPath = normalize(dirPath)
+  const [existing] = await getFidsByPaths({
+    userDataPath,
+    filePaths: [normalizedPath],
+  })
+  if (existing?.fid) {
+    return {
+      fid: String(existing.fid),
+      filePath: String(existing.file_path || normalizedPath),
+    }
+  }
+
+  const created = await mkdirByPath({
+    userDataPath,
+    dirPath: normalizedPath,
+  })
+  return {
+    fid: String(created.fid || ''),
+    filePath: normalizedPath,
+  }
+}
+
+const saveSharedFiles = async ({
+  userDataPath,
+  fidList,
+  fidTokenList,
+  toPdirFid,
+  pwdId,
+  stoken,
+}) => {
+  const query = new URLSearchParams({
+    pr: 'ucpro',
+    fr: 'pc',
+    uc_param_str: '',
+    app: 'clouddrive',
+    __dt: String(Math.round((1 + Math.random() * 4) * 60 * 1000)),
+    __t: String(Date.now()),
+  })
+  const payload = await requestJson({
+    userDataPath,
+    url: `${quarkApiBase}/1/clouddrive/share/sharepage/save?${query.toString()}`,
+    method: 'POST',
+    body: {
+      fid_list: fidList,
+      fid_token_list: fidTokenList,
+      to_pdir_fid: String(toPdirFid),
+      pwd_id: String(pwdId),
+      stoken: String(stoken),
+      pdir_fid: '0',
+      scene: 'link',
+    },
+  })
+
+  return payload?.data || {}
+}
+
+const waitForTask = async ({ userDataPath, taskId, maxAttempts = 60 }) => {
+  for (let retryIndex = 0; retryIndex < maxAttempts; retryIndex += 1) {
+    const query = new URLSearchParams({
+      pr: 'ucpro',
+      fr: 'pc',
+      uc_param_str: '',
+      task_id: String(taskId),
+      retry_index: String(retryIndex),
+      __dt: String(Math.round((1 + Math.random() * 4) * 60 * 1000)),
+      __t: String(Date.now()),
+    })
+    const payload = await requestJson({
+      userDataPath,
+      url: `${quarkApiBase}/1/clouddrive/task?${query.toString()}`,
+    })
+    if (Number(payload?.data?.status) === 2) {
+      return payload?.data || {}
+    }
+    await sleep(500)
+  }
+
+  throw new Error('夸克转存任务等待超时。')
+}
+
+const buildAutoSavePath = ({ dramaCode }) => `/duanju/${normalize(dramaCode || 'unknown')}`
+
+const saveShareToDrive = async ({
+  userDataPath,
+  shareUrl,
+  dramaCode,
+  dramaTitle,
+}) => {
+  const { pwdId, passcode, pdirFid } = parseShareUrl(shareUrl)
+  if (!pwdId) {
+    throw new Error('夸克分享链接无效。')
+  }
+
+  const stoken = await getShareToken({
+    userDataPath,
+    pwdId,
+    passcode,
+  })
+  if (!stoken) {
+    throw new Error('获取分享 stoken 失败。')
+  }
+
+  const shareItems = await listShareChildren({
+    userDataPath,
+    pwdId,
+    stoken,
+    pdirFid: pdirFid || '0',
+  })
+  if (shareItems.length === 0) {
+    throw new Error('分享为空或已失效。')
+  }
+
+  const saveDir = await ensureSaveDirectory({
+    userDataPath,
+    dirPath: buildAutoSavePath({ dramaCode, dramaTitle }),
+  })
+
+  const fidList = shareItems.map((item) => String(item.fid || '')).filter(Boolean)
+  const fidTokenList = shareItems
+    .map((item) => String(item.share_fid_token || ''))
+    .filter(Boolean)
+  if (fidList.length === 0 || fidTokenList.length !== fidList.length) {
+    throw new Error('分享列表缺少可转存文件标识。')
+  }
+
+  const saveResult = await saveSharedFiles({
+    userDataPath,
+    fidList,
+    fidTokenList,
+    toPdirFid: saveDir.fid,
+    pwdId,
+    stoken,
+  })
+  const taskId = String(saveResult.task_id || '')
+  if (!taskId) {
+    throw new Error('夸克未返回转存任务 ID。')
+  }
+
+  const task = await waitForTask({
+    userDataPath,
+    taskId,
+  })
+
+  return {
+    saveDirFid: String(saveDir.fid || ''),
+    saveDirPath: String(saveDir.filePath || ''),
+    savedTopFids: Array.isArray(task?.save_as?.save_as_top_fids)
+      ? task.save_as.save_as_top_fids.map((item) => String(item || '')).filter(Boolean)
+      : [],
+  }
 }
 
 const collectFoldersByCode = async ({ userDataPath, dramaCode, maxDepth = 5 }) => {
@@ -275,11 +539,18 @@ const extractPreviewUrlFromPlayInfo = (playInfo) => {
 }
 
 module.exports = {
+  buildAutoSavePath,
   collectFoldersByCode,
   collectVideosInFolder,
   extractPreviewUrlFromPlayInfo,
   fetchDownloadInfoByFids,
   fetchPlayInfo,
+  getFidsByPaths,
+  getShareToken,
+  listShareChildren,
+  mkdirByPath,
+  parseShareUrl,
   resolveQuarkCookie,
+  saveShareToDrive,
   saveQuarkCookie,
 }

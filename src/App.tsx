@@ -32,6 +32,8 @@ import type {
   ShortDramaImportBatchEntry,
   ShortDramaEpisodeEntry,
   ShortDramaImportSummary,
+  ShortDramaSaveRequestResult,
+  ShortDramaSaveStatus,
   ShortDramaTableSnapshot,
 } from './desktop'
 import type { DiscoveredSeriesRecord } from './discoveredSources'
@@ -65,6 +67,13 @@ type ShortDramaTableRow = {
   title: string
   quarkUrl: string
   baiduUrl: string
+  saveStatus: ShortDramaSaveStatus
+  saveRequestedAt: string
+  saveCompletedAt: string
+  saveError: string
+  savedRootFid: string
+  episodeCount: number
+  readyEpisodeCount: number
   updatedAt: string
 }
 
@@ -85,6 +94,7 @@ const previewVideoUrl =
   'https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4'
 const shortDramaAdapterId = 'short-drama-library'
 const shortDramaTablePageSize = 500
+const appEdition = import.meta.env.VITE_APP_EDITION === 'admin' ? 'admin' : 'client'
 
 const defaultManualForm: ManualSourceForm = {
   title: '',
@@ -200,6 +210,24 @@ const formatSyncMode = (value: DiscoverySyncHistoryEntry['mode']) => {
 }
 
 const formatPercent = (value: number) => `${value.toFixed(value >= 10 ? 0 : 1)}%`
+const normalizeBaseUrl = (value: string) => String(value || '').trim().replace(/\/+$/, '')
+const buildRemoteMediaProxyUrl = ({
+  baseUrl,
+  token,
+  sourceUrl,
+}: {
+  baseUrl: string
+  token: string
+  sourceUrl: string
+}) => {
+  const params = new URLSearchParams({
+    target: String(sourceUrl || ''),
+  })
+  if (token) {
+    params.set('access_token', token)
+  }
+  return `${normalizeBaseUrl(baseUrl)}/api/quark-media?${params.toString()}`
+}
 
 const formatBytes = (bytes: number) => {
   if (!bytes) {
@@ -368,6 +396,10 @@ function App() {
     useState<(typeof logLevelOptions)[number]>('全部')
   const [selectedResolution, setSelectedResolution] =
     useState<Resolution>(fallbackDesktopSettings.preferredResolution)
+  const [remoteSaveRequest, setRemoteSaveRequest] =
+    useState<ShortDramaSaveRequestResult | null>(null)
+  const [remoteSaveSubmitting, setRemoteSaveSubmitting] = useState(false)
+  const [lastAutoRequestedDramaCode, setLastAutoRequestedDramaCode] = useState('')
   const [selectedSeriesId, setSelectedSeriesId] = useState<string>(
     initialSeries[0]?.id ?? '',
   )
@@ -437,6 +469,13 @@ function App() {
         title: item.drama_name,
         quarkUrl: item.quark_url,
         baiduUrl: item.baidu_url,
+        saveStatus: item.save_status,
+        saveRequestedAt: item.save_requested_at,
+        saveCompletedAt: item.save_completed_at,
+        saveError: item.save_error,
+        savedRootFid: item.saved_root_fid,
+        episodeCount: item.episode_count,
+        readyEpisodeCount: item.ready_episode_count,
         updatedAt: item.updated_at
           ? new Date(item.updated_at).toLocaleString('zh-CN', { hour12: false })
           : '',
@@ -471,6 +510,13 @@ function App() {
   }, [filteredShortDramaTableRows, selectedShortDramaKey])
 
   const selectedShortDramaCode = selectedShortDramaRow?.dramaCode || ''
+  const isAdminEdition = appEdition === 'admin'
+  const remoteClientBaseUrl = normalizeBaseUrl(desktopSettings.remoteClientBaseUrl)
+  const remoteClientToken = String(desktopSettings.remoteClientToken || '').trim()
+  const isRemoteClientMode =
+    !isAdminEdition &&
+    desktopContext.isElectron &&
+    remoteClientBaseUrl.length > 0
 
   const displayResourceCount = hasShortDramaDataset
     ? shortDramaTableSnapshot.total
@@ -659,6 +705,16 @@ function App() {
   }, [browserQueue, desktopContext.isElectron])
 
   useEffect(() => {
+    if (!isRemoteClientMode) {
+      return
+    }
+
+    void loadRemoteShortDramaPageEvent(0).catch((error) => {
+      setActionMessage(error instanceof Error ? error.message : '连接管理端失败。')
+    })
+  }, [isRemoteClientMode, remoteClientBaseUrl, remoteClientToken])
+
+  useEffect(() => {
     if (filteredShortDramaTableRows.length === 0) {
       return
     }
@@ -675,7 +731,33 @@ function App() {
   useEffect(() => {
     if (!hasShortDramaDataset || !selectedShortDramaCode) {
       setShortDramaEpisodes([])
+      setRemoteSaveRequest(null)
       return
+    }
+
+    if (isRemoteClientMode) {
+      let disposed = false
+      setShortDramaEpisodesLoading(true)
+      void loadRemoteShortDramaSelectionEvent(selectedShortDramaCode)
+        .then(() => {
+          if (disposed) {
+            return
+          }
+        })
+        .catch((error) => {
+          if (!disposed) {
+            setActionMessage(error instanceof Error ? error.message : '加载远程短剧失败。')
+          }
+        })
+        .finally(() => {
+          if (!disposed) {
+            setShortDramaEpisodesLoading(false)
+          }
+        })
+
+      return () => {
+        disposed = true
+      }
     }
 
     if (!window.desktopApi || !desktopContext.isElectron) {
@@ -703,7 +785,85 @@ function App() {
     return () => {
       disposed = true
     }
-  }, [hasShortDramaDataset, selectedShortDramaCode])
+  }, [
+    desktopContext.isElectron,
+    hasShortDramaDataset,
+    isRemoteClientMode,
+    remoteClientBaseUrl,
+    remoteClientToken,
+    selectedShortDramaCode,
+  ])
+
+  useEffect(() => {
+    if (!isRemoteClientMode || !selectedShortDramaRow) {
+      return
+    }
+    if (shortDramaEpisodesLoading || shortDramaEpisodes.length > 0) {
+      return
+    }
+
+    const currentStatus = remoteSaveRequest?.status || selectedShortDramaRow.saveStatus
+    if (currentStatus === 'pending' || currentStatus === 'processing') {
+      return
+    }
+    if (lastAutoRequestedDramaCode === selectedShortDramaRow.dramaCode) {
+      return
+    }
+
+    setLastAutoRequestedDramaCode(selectedShortDramaRow.dramaCode)
+    setRemoteSaveSubmitting(true)
+    void requestRemoteSaveEvent(selectedShortDramaRow.dramaCode, 'client-auto')
+      .then((snapshot) => {
+        startTransition(() => {
+          setRemoteSaveRequest(snapshot)
+          setShortDramaTableSnapshot((current) => ({
+            ...current,
+            rows: current.rows.map((row) =>
+              row.drama_code === selectedShortDramaRow.dramaCode
+                ? {
+                    ...row,
+                    save_status: snapshot.status,
+                    save_requested_at: snapshot.requestedAt,
+                    save_completed_at: snapshot.completedAt,
+                    save_error: snapshot.errorMessage,
+                    saved_root_fid: snapshot.savedRootFid,
+                    episode_count: snapshot.episodeCount,
+                    ready_episode_count: snapshot.readyEpisodeCount,
+                  }
+                : row,
+            ),
+          }))
+        })
+        setActionMessage(`已向管理端请求准备《${selectedShortDramaRow.title}》。`)
+      })
+      .catch((error) => {
+        setActionMessage(error instanceof Error ? error.message : '请求准备资源失败。')
+      })
+      .finally(() => {
+        setRemoteSaveSubmitting(false)
+      })
+  }, [
+    isRemoteClientMode,
+    lastAutoRequestedDramaCode,
+    remoteSaveRequest,
+    selectedShortDramaRow,
+    shortDramaEpisodes,
+    shortDramaEpisodesLoading,
+  ])
+
+  useEffect(() => {
+    if (!isRemoteClientMode || !selectedShortDramaRow) {
+      return
+    }
+
+    const timer = window.setInterval(() => {
+      void loadRemoteShortDramaSelectionEvent(selectedShortDramaRow.dramaCode).catch(() => {})
+    }, 8000)
+
+    return () => {
+      window.clearInterval(timer)
+    }
+  }, [isRemoteClientMode, remoteClientBaseUrl, remoteClientToken, selectedShortDramaRow])
 
   const maxConcurrentDownloads = Math.max(1, desktopSettings.maxConcurrentDownloads || 1)
 
@@ -902,7 +1062,90 @@ function App() {
     })
   }
 
+  const fetchRemoteShortDramaJson = async <T,>(
+    relativePath: string,
+    init?: RequestInit,
+  ): Promise<T> => {
+    const endpoint = `${remoteClientBaseUrl}${relativePath}`
+    const headers = new Headers(init?.headers || {})
+    if (remoteClientToken) {
+      headers.set('Authorization', `Bearer ${remoteClientToken}`)
+    }
+    if (init?.body && !headers.has('Content-Type')) {
+      headers.set('Content-Type', 'application/json')
+    }
+
+    const response = await fetch(endpoint, {
+      ...init,
+      headers,
+    })
+
+    const text = await response.text()
+    const payload = text ? JSON.parse(text) : null
+
+    if (!response.ok) {
+      throw new Error(
+        typeof payload?.error === 'string'
+          ? payload.error
+          : `远程管理端请求失败：HTTP ${response.status}`,
+      )
+    }
+
+    return payload as T
+  }
+
+  const loadRemoteShortDramaPage = async (offset: number) => {
+    const snapshot = await fetchRemoteShortDramaJson<ShortDramaTableSnapshot>(
+      `/api/short-dramas?limit=${shortDramaTablePageSize}&offset=${offset}`,
+    )
+    startTransition(() => {
+      setShortDramaTableSnapshot(snapshot)
+    })
+  }
+
+  const loadRemoteShortDramaPageEvent = useEffectEvent(async (offset: number) => {
+    await loadRemoteShortDramaPage(offset)
+  })
+
+  const loadRemoteShortDramaSelectionEvent = useEffectEvent(async (dramaCode: string) => {
+    const [episodes, request] = await Promise.all([
+      fetchRemoteShortDramaJson<ShortDramaEpisodeEntry[]>(
+        `/api/short-dramas/${encodeURIComponent(dramaCode)}/episodes`,
+      ),
+      fetchRemoteShortDramaJson<ShortDramaSaveRequestResult | null>(
+        `/api/short-dramas/${encodeURIComponent(dramaCode)}/request`,
+      ),
+    ])
+
+    startTransition(() => {
+      setShortDramaEpisodes(episodes)
+      setRemoteSaveRequest(request)
+    })
+  })
+
+  const requestRemoteSave = async (
+    dramaCode: string,
+    requester: 'client-auto' | 'client-manual',
+  ) =>
+    fetchRemoteShortDramaJson<ShortDramaSaveRequestResult>(
+      `/api/short-dramas/${encodeURIComponent(dramaCode)}/request`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ requester }),
+      },
+    )
+
+  const requestRemoteSaveEvent = useEffectEvent(
+    async (dramaCode: string, requester: 'client-auto' | 'client-manual') =>
+      requestRemoteSave(dramaCode, requester),
+  )
+
   const loadShortDramaTableRows = async (offset = 0) => {
+    if (isRemoteClientMode) {
+      await loadRemoteShortDramaPage(offset)
+      return
+    }
+
     if (!window.desktopApi || !desktopContext.isElectron) {
       return
     }
@@ -949,6 +1192,29 @@ function App() {
       setActionMessage(error instanceof Error ? error.message : '保存 Cookie 失败。')
     } finally {
       setSavingQuarkCookie(false)
+    }
+  }
+
+  const requestSelectedRemoteSave = async () => {
+    if (!isRemoteClientMode || !selectedShortDramaRow) {
+      return
+    }
+
+    setRemoteSaveSubmitting(true)
+    try {
+      const snapshot = await requestRemoteSave(
+        selectedShortDramaRow.dramaCode,
+        'client-manual',
+      )
+      startTransition(() => {
+        setRemoteSaveRequest(snapshot)
+      })
+      setLastAutoRequestedDramaCode(selectedShortDramaRow.dramaCode)
+      setActionMessage(`已重新请求管理端准备《${selectedShortDramaRow.title}》。`)
+    } catch (error) {
+      setActionMessage(error instanceof Error ? error.message : '请求准备资源失败。')
+    } finally {
+      setRemoteSaveSubmitting(false)
     }
   }
 
@@ -1006,7 +1272,13 @@ function App() {
     }
 
     let sourceUrl = rawUrl
-    if (desktopContext.isElectron && window.desktopApi?.getPlayablePreviewUrl) {
+    if (isRemoteClientMode) {
+      sourceUrl = buildRemoteMediaProxyUrl({
+        baseUrl: remoteClientBaseUrl,
+        token: remoteClientToken,
+        sourceUrl: rawUrl,
+      })
+    } else if (desktopContext.isElectron && window.desktopApi?.getPlayablePreviewUrl) {
       try {
         sourceUrl = await window.desktopApi.getPlayablePreviewUrl({ sourceUrl: rawUrl })
       } catch (error) {
@@ -1044,7 +1316,13 @@ function App() {
       return
     }
 
-    if (window.desktopApi.getPlayablePreviewUrl) {
+    if (isRemoteClientMode) {
+      sourceUrl = buildRemoteMediaProxyUrl({
+        baseUrl: remoteClientBaseUrl,
+        token: remoteClientToken,
+        sourceUrl,
+      })
+    } else if (window.desktopApi.getPlayablePreviewUrl) {
       try {
         sourceUrl = await window.desktopApi.getPlayablePreviewUrl({ sourceUrl })
       } catch (error) {
@@ -1817,6 +2095,415 @@ function App() {
     }
   }
 
+  const previewModal = previewState ? (
+    <div className="modal-backdrop" onClick={() => setPreviewState(null)}>
+      <div className="modal" onClick={(event) => event.stopPropagation()}>
+        <div className="section-header">
+          <div>
+            <p className="eyebrow">预览窗口</p>
+            <h3>{previewState.title}</h3>
+          </div>
+          <button className="small ghost" onClick={() => setPreviewState(null)}>
+            关闭
+          </button>
+        </div>
+        <video
+          controls
+          className="preview-player"
+          src={previewState.sourceUrl}
+          onError={() => {
+            setActionMessage('预览播放失败，请先点“刷新链接”后重试。')
+          }}
+        />
+        <p className="modal-note">来源：{previewState.note}</p>
+      </div>
+    </div>
+  ) : null
+
+  if (!isAdminEdition && hasShortDramaDataset) {
+    return (
+      <>
+        <div className="client-shell">
+          <header className="client-topbar">
+            <div className="client-brand">
+              <p className="eyebrow">HongGuo Client</p>
+              <h1>短剧下载客户端</h1>
+            </div>
+            <div className="client-toolbar">
+              <label className="client-search">
+                <span>搜索剧名</span>
+                <input
+                  value={searchTerm}
+                  onChange={(event) => setSearchTerm(event.target.value)}
+                  placeholder="输入剧名或编号"
+                />
+              </label>
+              <label className="client-inline-field">
+                <span>分辨率</span>
+                <select
+                  value={selectedResolution}
+                  onChange={(event) =>
+                    void handleResolutionChange(event.target.value as Resolution)
+                  }
+                >
+                  <option value="720p">720p</option>
+                  <option value="1080p">1080p</option>
+                </select>
+              </label>
+              <label className="client-search client-remote-field">
+                <span>管理端地址</span>
+                <input
+                  value={desktopSettings.remoteClientBaseUrl}
+                  onChange={(event) =>
+                    setDesktopSettings((current) => ({
+                      ...current,
+                      remoteClientBaseUrl: event.target.value,
+                    }))
+                  }
+                  placeholder="http://你的管理端IP:39095"
+                />
+              </label>
+              <label className="client-inline-field client-token-field">
+                <span>访问令牌</span>
+                <input
+                  value={desktopSettings.remoteClientToken}
+                  onChange={(event) =>
+                    setDesktopSettings((current) => ({
+                      ...current,
+                      remoteClientToken: event.target.value,
+                    }))
+                  }
+                  placeholder="可选"
+                />
+              </label>
+              <div className="client-download-dir">
+                <span>下载目录</span>
+                <strong>{desktopSettings.downloadDirectory || '未设置'}</strong>
+              </div>
+              <button
+                className="small ghost"
+                onClick={() =>
+                  void persistDesktopSettings({
+                    remoteClientBaseUrl: desktopSettings.remoteClientBaseUrl,
+                    remoteClientToken: desktopSettings.remoteClientToken,
+                  })
+                }
+              >
+                保存连接
+              </button>
+              <button className="small ghost" onClick={() => void chooseDownloadDirectory()}>
+                选择目录
+              </button>
+              <button className="small ghost" onClick={() => void openDownloadDirectory()}>
+                打开目录
+              </button>
+            </div>
+          </header>
+
+          <section className="client-status-strip">
+            <div className="client-stat">
+              <span>资源总数</span>
+              <strong>{displayResourceCount}</strong>
+            </div>
+            <div className="client-stat">
+              <span>下载队列</span>
+              <strong>{queueStats.total}</strong>
+            </div>
+            <div className="client-stat">
+              <span>已完成</span>
+              <strong>{queueStats.completed}</strong>
+            </div>
+            <div className="client-stat">
+              <span>失败 / 暂停</span>
+              <strong>{queueStats.failed + queueStats.paused}</strong>
+            </div>
+            <div className="client-pill-row">
+              {categories.map((category) => (
+                <button
+                  key={category}
+                  className={category === activeCategory ? 'client-chip active' : 'client-chip'}
+                  onClick={() => setActiveCategory(category)}
+                >
+                  {category}
+                </button>
+              ))}
+            </div>
+          </section>
+
+          {actionMessage ? <div className="banner">{actionMessage}</div> : null}
+
+          <section className="client-layout">
+            <aside className="client-library card">
+              <div className="section-header">
+                <div>
+                  <p className="eyebrow">资源列表</p>
+                  <h3>短剧清单</h3>
+                </div>
+                <span className="pill">
+                  当前页 {filteredShortDramaTableRows.length} / {shortDramaTableSnapshot.total}
+                </span>
+              </div>
+              <div className="client-list">
+                {filteredShortDramaTableRows.length === 0 ? (
+                  <div className="empty-state">当前筛选没有结果。</div>
+                ) : (
+                  filteredShortDramaTableRows.map((row, index) => (
+                    <button
+                      key={`${row.dramaCode}-${row.title}`}
+                      className={
+                        selectedShortDramaRow?.dramaCode === row.dramaCode &&
+                        selectedShortDramaRow?.title === row.title
+                          ? 'client-list-item active'
+                          : 'client-list-item'
+                      }
+                      onClick={() => setSelectedShortDramaKey(`${row.dramaCode}-${row.title}`)}
+                    >
+                      <span className="client-list-index">{index + 1}</span>
+                      <span className="client-list-copy">
+                        <strong>{row.title}</strong>
+                        <small>
+                          编号 {row.dramaCode || '-'} · {row.updatedAt || '未更新'}
+                        </small>
+                      </span>
+                    </button>
+                  ))
+                )}
+              </div>
+              <div className="client-pager">
+                <button
+                  className="small ghost"
+                  onClick={() => void loadPreviousShortDramaPage()}
+                  disabled={shortDramaTableSnapshot.offset <= 0}
+                >
+                  上一页
+                </button>
+                <button
+                  className="small ghost"
+                  onClick={() => void loadNextShortDramaPage()}
+                  disabled={
+                    shortDramaTableSnapshot.offset + shortDramaTableSnapshot.limit >=
+                    shortDramaTableSnapshot.total
+                  }
+                >
+                  下一页
+                </button>
+                <button
+                  className="small ghost"
+                  onClick={() => void loadShortDramaTableRows(shortDramaTableSnapshot.offset)}
+                >
+                  刷新
+                </button>
+              </div>
+            </aside>
+
+            <main className="client-detail card">
+              {selectedShortDramaRow ? (
+                <>
+                  <div className="client-drama-head">
+                    <div className="client-poster" aria-hidden="true">
+                      <span>{selectedShortDramaRow.dramaCode || 'DR'}</span>
+                    </div>
+                    <div className="client-drama-copy">
+                      <p className="eyebrow">客户端资源详情</p>
+                      <h2>{selectedShortDramaRow.title}</h2>
+                      <p>
+                        编号 {selectedShortDramaRow.dramaCode || '-'} · 最后更新时间{' '}
+                        {selectedShortDramaRow.updatedAt || '未记录'}
+                      </p>
+                      <div className="tag-row">
+                        {selectedShortDramaRow.quarkUrl ? <span className="tag">夸克网盘</span> : null}
+                        {selectedShortDramaRow.baiduUrl ? <span className="tag">百度网盘</span> : null}
+                        <span className="tag">{shortDramaEpisodes.length} 集已同步</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="client-action-row">
+                    <button
+                      className="primary"
+                      onClick={() => void openExternalLink(selectedShortDramaRow.quarkUrl)}
+                      disabled={!selectedShortDramaRow.quarkUrl}
+                    >
+                      打开夸克
+                    </button>
+                    <button
+                      className="secondary"
+                      onClick={() => void openExternalLink(selectedShortDramaRow.baiduUrl)}
+                      disabled={!selectedShortDramaRow.baiduUrl}
+                    >
+                      打开百度
+                    </button>
+                    <button
+                      className="small ghost"
+                      onClick={() => setSearchTerm(selectedShortDramaRow.title)}
+                    >
+                      定位同名资源
+                    </button>
+                  </div>
+
+                  <div className="client-episode-toolbar">
+                    <div>
+                      <strong>资源准备状态</strong>
+                      <span>
+                        状态 {(remoteSaveRequest?.status || selectedShortDramaRow.saveStatus) || 'idle'}
+                        {' '}· 已同步 {remoteSaveRequest?.episodeCount ?? selectedShortDramaRow.episodeCount} 集
+                        {' '}· 可下载 {remoteSaveRequest?.readyEpisodeCount ?? selectedShortDramaRow.readyEpisodeCount} 集
+                      </span>
+                    </div>
+                    <div className="client-episode-actions">
+                      <button
+                        className="small ghost"
+                        onClick={() => void requestSelectedRemoteSave()}
+                        disabled={remoteSaveSubmitting}
+                      >
+                        {remoteSaveSubmitting ? '请求中...' : '请求准备资源'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {remoteSaveRequest?.errorMessage ? (
+                    <div className="queue-path">{remoteSaveRequest.errorMessage}</div>
+                  ) : null}
+
+                  <div className="client-episode-toolbar">
+                    <div>
+                      <strong>分集列表</strong>
+                      <span>
+                        {shortDramaEpisodesLoading
+                          ? '正在加载已同步分集'
+                          : `当前可见 ${shortDramaEpisodes.length} 集`}
+                      </span>
+                    </div>
+                    <div className="client-episode-hint">
+                      客户端仅展示可预览 / 可下载的已同步分集
+                    </div>
+                  </div>
+
+                  <div className="client-episode-list">
+                    {shortDramaEpisodesLoading ? (
+                      <div className="empty-state">正在加载分集...</div>
+                    ) : shortDramaEpisodes.length === 0 ? (
+                      <div className="empty-state">该剧暂未下发分集数据。</div>
+                    ) : (
+                      shortDramaEpisodes.map((episode) => {
+                        const previewUrl = resolveShortDramaPreviewUrl(episode)
+                        return (
+                          <article
+                            key={`${episode.drama_code}-${episode.episode_index}`}
+                            className="client-episode-row"
+                          >
+                            <div className="client-episode-meta">
+                              <strong>
+                                {episode.episode_title || `第${episode.episode_index}集`}
+                              </strong>
+                              <span>{episode.file_name}</span>
+                              <span>
+                                {episode.status} · {formatBytes(episode.file_size || 0)}
+                              </span>
+                            </div>
+                            <div className="client-episode-actions">
+                              <button
+                                className="small ghost"
+                                onClick={() => void previewShortDramaEpisode(episode)}
+                                disabled={!previewUrl}
+                              >
+                                预览
+                              </button>
+                              <button
+                                className="small"
+                                onClick={() => void downloadEpisode(episode)}
+                              >
+                                下载
+                              </button>
+                            </div>
+                          </article>
+                        )
+                      })
+                    )}
+                  </div>
+                </>
+              ) : (
+                <div className="empty-state">请选择左侧短剧。</div>
+              )}
+            </main>
+
+            <aside className="client-queue card">
+              <div className="section-header">
+                <div>
+                  <p className="eyebrow">任务中心</p>
+                  <h3>下载队列</h3>
+                </div>
+                <span className="pill">
+                  进行中 {queueStats.downloading} / 等待 {queueStats.waiting}
+                </span>
+              </div>
+              <div className="client-queue-actions">
+                <button className="small" onClick={() => void retryFailedDownloads()}>
+                  重试失败
+                </button>
+                <button className="small ghost" onClick={() => void clearCompleted()}>
+                  清空完成
+                </button>
+                <button className="small ghost" onClick={() => void clearFailedDownloads()}>
+                  清空失败
+                </button>
+              </div>
+              <div className="client-queue-list">
+                {visibleQueue.length === 0 ? (
+                  <div className="empty-state">还没有下载任务。</div>
+                ) : (
+                  visibleQueue.map((item) => (
+                    <article key={item.id} className="client-queue-row">
+                      <div className="client-queue-head">
+                        <strong>
+                          {item.episodeTitle} {item.resolution}
+                        </strong>
+                        <span>{item.status}</span>
+                      </div>
+                      <p>{item.seriesTitle}</p>
+                      <div className="progress-track">
+                        <div className="progress-bar" style={{ width: `${item.progress}%` }} />
+                      </div>
+                      <div className="client-queue-foot">
+                        <span>
+                          {formatBytes(item.transferredBytes)} / {formatBytes(item.totalBytes)}
+                        </span>
+                        <div className="button-row">
+                          {item.status !== '已完成' ? (
+                            <button
+                              className="small ghost"
+                              onClick={() => void toggleQueueItem(item)}
+                            >
+                              {item.status === '已暂停' || item.status === '失败'
+                                ? '恢复'
+                                : '暂停'}
+                            </button>
+                          ) : null}
+                          {desktopContext.isElectron && item.status === '已完成' ? (
+                            <button
+                              className="small ghost"
+                              onClick={() => void showDownloadInFolder(item.id)}
+                            >
+                              打开位置
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                      {item.errorMessage ? (
+                        <div className="queue-path">{item.errorMessage}</div>
+                      ) : null}
+                    </article>
+                  ))
+                )}
+              </div>
+            </aside>
+          </section>
+        </div>
+        {previewModal}
+      </>
+    )
+  }
+
   return (
     <>
       <div className="shell">
@@ -2533,6 +3220,69 @@ function App() {
                   下载执行层现在支持暂停后按已下载字节继续。后续只要让适配器返回
                   `sourceUrl` 和文件名即可接入。
                 </p>
+
+                <div className="field">
+                  <span>管理端远程服务</span>
+                  <div className="button-row">
+                    <button
+                      className={desktopSettings.remoteServiceEnabled ? 'small' : 'small ghost'}
+                      onClick={() =>
+                        void persistDesktopSettings({
+                          remoteServiceEnabled: !desktopSettings.remoteServiceEnabled,
+                        })
+                      }
+                    >
+                      {desktopSettings.remoteServiceEnabled ? '已开启' : '点击开启'}
+                    </button>
+                    <span className="pill">
+                      端口 {desktopSettings.remoteServicePort}
+                    </span>
+                  </div>
+                </div>
+
+                <label className="field">
+                  <span>远程服务端口</span>
+                  <input
+                    type="number"
+                    min={1024}
+                    max={65535}
+                    value={desktopSettings.remoteServicePort}
+                    onChange={(event) =>
+                      setDesktopSettings((current) => ({
+                        ...current,
+                        remoteServicePort: Number(event.target.value || 39095),
+                      }))
+                    }
+                    onBlur={() =>
+                      void persistDesktopSettings({
+                        remoteServicePort: desktopSettings.remoteServicePort,
+                      })
+                    }
+                  />
+                </label>
+
+                <label className="field">
+                  <span>远程访问令牌</span>
+                  <input
+                    value={desktopSettings.remoteServiceToken}
+                    onChange={(event) =>
+                      setDesktopSettings((current) => ({
+                        ...current,
+                        remoteServiceToken: event.target.value,
+                      }))
+                    }
+                    onBlur={() =>
+                      void persistDesktopSettings({
+                        remoteServiceToken: desktopSettings.remoteServiceToken,
+                      })
+                    }
+                    placeholder="为空则不校验令牌"
+                  />
+                </label>
+                <p className="control-note">
+                  客户端连接地址：`http://你的IP:{desktopSettings.remoteServicePort}`。开启后，
+                  朋友客户端会从你的管理端读取短剧清单、分集状态，并向你请求准备资源。
+                </p>
                 </div>
               </section>
 
@@ -3089,33 +3839,11 @@ function App() {
         </section>
       </div>
 
-      {previewState ? (
-        <div className="modal-backdrop" onClick={() => setPreviewState(null)}>
-          <div className="modal" onClick={(event) => event.stopPropagation()}>
-            <div className="section-header">
-              <div>
-                <p className="eyebrow">预览窗口</p>
-                <h3>{previewState.title}</h3>
-              </div>
-              <button className="small ghost" onClick={() => setPreviewState(null)}>
-                关闭
-              </button>
-            </div>
-            <video
-              controls
-              className="preview-player"
-              src={previewState.sourceUrl}
-              onError={() => {
-                setActionMessage('预览播放失败，请先点“刷新链接”后重试。')
-              }}
-            />
-            <p className="modal-note">来源：{previewState.note}</p>
-          </div>
-        </div>
-      ) : null}
+      {previewModal}
     </>
   )
 }
 
 export default App
 
+import { useEffectEvent } from 'react'
