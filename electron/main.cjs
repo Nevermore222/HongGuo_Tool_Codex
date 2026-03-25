@@ -882,10 +882,6 @@ const startRemoteAdminService = async () => {
 
   const port = Math.max(1024, Number(settings.remoteServicePort || 39095))
   if (remoteAdminServer) {
-    const address = remoteAdminServer.address()
-    if (address && typeof address !== 'string' && address.port === port) {
-      return
-    }
     await new Promise((resolve) => remoteAdminServer.close(resolve))
     remoteAdminServer = null
   }
@@ -935,7 +931,10 @@ const startRemoteAdminService = async () => {
         return
       }
 
-      const matchedCode = /^\/api\/short-dramas\/([^/]+)(?:\/(episodes|request|cover))?$/.exec(pathname)
+      const matchedCode =
+        /^\/api\/short-dramas\/([^/]+)(?:\/(episodes|request|cover|episodes\/\d+\/refresh))?$/.exec(
+          pathname,
+        )
       if (matchedCode) {
         const dramaCode = decodeURIComponent(matchedCode[1] || '')
         const action = matchedCode[2] || ''
@@ -981,6 +980,21 @@ const startRemoteAdminService = async () => {
           })
           void processShortDramaSaveRequest(dramaCode)
           sendJson(res, 202, snapshot)
+          return
+        }
+
+        const refreshMatched = /^episodes\/(\d+)\/refresh$/.exec(action)
+        if (req.method === 'POST' && refreshMatched) {
+          const episodeIndex = Number(refreshMatched[1] || 0)
+          sendJson(
+            res,
+            200,
+            await refreshShortDramaEpisodeLink({
+              userDataPath: app.getPath('userData'),
+              dramaCode,
+              episodeIndex,
+            }),
+          )
           return
         }
       }

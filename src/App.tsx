@@ -956,7 +956,6 @@ function App() {
       return
     }
 
-    setLastAutoRequestedDramaCode(selectedShortDramaRow.dramaCode)
     setRemoteSaveSubmitting(true)
     const requestPromise = isRemoteClientMode
       ? requestRemoteSaveEvent(selectedShortDramaRow.dramaCode, 'client-auto')
@@ -968,6 +967,7 @@ function App() {
         if (!snapshot) {
           throw new Error('未能创建资源准备请求。')
         }
+        setLastAutoRequestedDramaCode(selectedShortDramaRow.dramaCode)
         startTransition(() => {
           setRemoteSaveRequest(snapshot)
           setShortDramaTableSnapshot((current) => ({
@@ -998,6 +998,7 @@ function App() {
         )
       })
       .catch((error) => {
+        setLastAutoRequestedDramaCode('')
         setActionMessage(error instanceof Error ? error.message : '请求准备资源失败。')
       })
       .finally(() => {
@@ -1403,6 +1404,14 @@ function App() {
       },
     )
 
+  const refreshRemoteEpisodeLink = async (dramaCode: string, episodeIndex: number) =>
+    fetchRemoteShortDramaJson<ShortDramaEpisodeEntry>(
+      `/api/short-dramas/${encodeURIComponent(dramaCode)}/episodes/${episodeIndex}/refresh`,
+      {
+        method: 'POST',
+      },
+    )
+
   const requestRemoteSaveEvent = useEffectEvent(
     async (dramaCode: string, requester: 'client-auto' | 'client-manual') =>
       requestRemoteSave(dramaCode, requester),
@@ -1519,15 +1528,20 @@ function App() {
   }
 
   const refreshEpisodeLink = async (episodeIndex: number) => {
-    if (!window.desktopApi || !desktopContext.isElectron || !selectedShortDramaCode) {
+    if (!desktopContext.isElectron || !selectedShortDramaCode) {
       return
     }
 
     try {
-      const updated = await window.desktopApi.refreshShortDramaEpisodeLink({
-        dramaCode: selectedShortDramaCode,
-        episodeIndex,
-      })
+      const updated = isRemoteClientMode
+        ? await refreshRemoteEpisodeLink(selectedShortDramaCode, episodeIndex)
+        : await window.desktopApi?.refreshShortDramaEpisodeLink({
+            dramaCode: selectedShortDramaCode,
+            episodeIndex,
+          })
+      if (!updated) {
+        throw new Error('刷新链接失败。')
+      }
       startTransition(() => {
         setShortDramaEpisodes((current) =>
           current.map((item) =>
@@ -1577,14 +1591,25 @@ function App() {
     let sourceUrl = String(episode.download_url || '').trim()
     if (!sourceUrl) {
       await refreshEpisodeLink(episode.episode_index)
-      const latest = await window.desktopApi.getShortDramaEpisodes({
-        dramaCode: selectedShortDramaCode,
-      })
-      const matched = latest.find((item) => item.episode_index === episode.episode_index)
-      sourceUrl = String(matched?.download_url || '').trim()
-      startTransition(() => {
-        setShortDramaEpisodes(latest)
-      })
+      if (isRemoteClientMode) {
+        const latest = await fetchRemoteShortDramaJson<ShortDramaEpisodeEntry[]>(
+          `/api/short-dramas/${encodeURIComponent(selectedShortDramaCode)}/episodes`,
+        )
+        const matched = latest.find((item) => item.episode_index === episode.episode_index)
+        sourceUrl = String(matched?.download_url || '').trim()
+        startTransition(() => {
+          setShortDramaEpisodes(latest)
+        })
+      } else {
+        const latest = await window.desktopApi.getShortDramaEpisodes({
+          dramaCode: selectedShortDramaCode,
+        })
+        const matched = latest.find((item) => item.episode_index === episode.episode_index)
+        sourceUrl = String(matched?.download_url || '').trim()
+        startTransition(() => {
+          setShortDramaEpisodes(latest)
+        })
+      }
     }
 
     if (!sourceUrl) {
